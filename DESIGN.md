@@ -24,6 +24,8 @@ Non-negotiable. If one can't be met, stop and say so.
 6. **No admin rights** to install or run the app. Per-user, runs from any folder. (Developer tools such as the .NET SDK are exempt.)
 7. **Nothing private in logs or source control.** Logs may hold timings, durations, file names, paths and errors, never transcript text or audio. The GitHub repo is public: recordings, transcripts, test data and models are never committed (see the `.gitignore` rules in section 5).
 
+Alongside these, one standing design rule: **nothing in v1 may compromise a possible Microsoft Store release.** Section 18 lists the specific rules. A Store release would add a separate x64 build next to the ARM64 one; hard constraint 1 applies to the ARM64 build.
+
 ## 3. Decisions
 
 | Decision | Why |
@@ -46,6 +48,7 @@ Non-negotiable. If one can't be met, stop and say so.
 | ARM64X files pass the ARM64 check. | .NET's WPF ships `vcruntime140_cor3.dll` as ARM64X. Its header says ARM64 and an ARM64 process runs its native ARM64 code, so nothing is emulated. |
 | Tests use xUnit v3 on Microsoft.Testing.Platform. | The .NET 10 SDK no longer runs xUnit v3 through the older VSTest runner; this also drops two test packages. |
 | The recognizer uses 6 threads by default and decodes one chunk at a time. | Milestone 2 benchmark, first 10 minutes of the test recording: 4, 6, 8 and 11 threads gave real-time factors of 0.030, 0.029, 0.031 and 0.033. Batching 2, 4 or 8 chunks per call was slower (0.033 to 0.036). |
+| Nothing in v1 may compromise a possible Microsoft Store release; section 18 lists the rules, and every milestone is checked against them. | Audited after Milestone 2: no conflicts. The only file writes are transcripts next to the recording. Paths come from the app folder or Windows known folders. The `win-arm64` sherpa-onnx package reference is harmless for an x64 build, because the main package already brings every platform's native files and an x64 build selects only the x64 ones. |
 | With speaker labels off, paragraphs split at pauses only, never on length. | A 100-word cap ending paragraphs at the next sentence end was tried in Milestone 2 and cut paragraphs off mid-thought. Long paragraphs are the accepted trade-off. |
 
 ## 4. Technology
@@ -178,7 +181,7 @@ What this means for the build:
 - **The mode is remembered per device.** Talktrace remembers the mode last used with each playback device and preselects it, so the speakerphone comes up as Online call, speakers and the headphones as Online call, headphones. For a device it hasn't seen before, it guesses from the device type Windows reports: headset or headphones → headphones mode, anything else → speakers mode. The selected mode is always shown before Start and can be changed.
 - **One device, both directions.** A headset or speakerphone is both the microphone and the playback device. The silence keep-alive plays to it; silence is inaudible. Because one device clock usually drives both directions, drift is tiny in these setups; the aligned writer matters most when the microphone and playback are different devices.
 - **Bluetooth headphones.** They switch to hands-free mode as soon as any app opens their mic (Teams, or Talktrace's level meter), and both directions drop to phone quality. Windows may also present that as a different device mid-call, which the device-change handling covers. Recording still works, but accuracy falls, most of all on narrowband (8 kHz) links. Talktrace warns when the microphone runs below 16 kHz. Bluetooth also delays the microphone track by a few tenths of a second relative to system audio; that only nudges my turns slightly later and doesn't change their order.
-- **Laptop speakers and mic.** The hardest case for echo removal, because the others reach the microphone at full strength. The echo check in section 15 covers it.
+- **Laptop speakers and mic.** The hardest case for echo removal, because the others reach the microphone at full strength. The echo check in section 15 covers it. If word matching isn't enough, evaluate Windows 11's own echo cancellation in Milestone 7. NAudio 3 exposes its control for capture streams (`AudioClient.TryGetAcousticEchoCancellationControl`), which may let Windows remove the speaker audio from Talktrace's microphone track where the device supports it.
 
 **Capture**
 
@@ -280,7 +283,7 @@ When it finishes, the CLI prints per-stage timings and the real-time factor.
 - **Speed target.** Fast profile, 60-minute 3-speaker recording, under 20 minutes on this machine. Baseline from the 50-minute test: about 2 minutes transcription and about 6 minutes speaker identification. Measure in Milestones 2 and 3; if far off, profile and report where the time goes before optimising.
 - **Milestone 2 result** (speaker labels off, 49-minute M4A test recording, quiet machine): reading audio 13 s, finding speech 10 s, transcribing 88 s; 110 s in total, real-time factor 0.037, peak memory 1.86 GB.
 - **Threads.** 6 threads was fastest in the Milestone 2 benchmark and is the default. `Talktrace.Cli <file> --benchmark` re-runs the comparison, for example after a sherpa-onnx upgrade.
-- **Memory target.** Under about 2.5 GB peak in the worker for a 90-minute recording on the Fast profile. Report the actual figure.
+- **Memory target.** Under about 2.5 GB peak in the worker for a 90-minute recording on the Fast profile. Report the actual figure. Milestone 2 measured 1.86 GB for 49 minutes without speaker labels. A 90-minute file needs a few hundred MB more for audio, which leaves speaker identification only a few hundred MB of headroom, so measure it in Milestone 3.
 - **Logging.** `%LOCALAPPDATA%\Talktrace\logs\`, one file per day, kept for 14 days, shared by the app and the worker (each line tagged with its process). Log app version, model profile, thread count, audio duration, file name and type, wall time per stage, real-time factor, and errors with stack traces. **Never** log transcript text or audio.
 
 ## 13. Build and packaging
@@ -301,7 +304,10 @@ Work through these in order. Stop at the end of each one and show the results be
    - Show: the build output, the ARM64 check, and the sample transcript with word times.
 2. **Transcription without speakers.** Media Foundation decoding for WAV, MP3, M4A and MP4; VAD; chunking; ASR with word times; output with speaker labels off; thread benchmark. CLI only.
    - Show: a benchmark on the test recording, with per-stage times, the real-time factor and the thread results.
-3. **Speaker labels.** Diarization, speaker assignment to words, turn assembly, speaker renumbering, and unit tests for that logic. CLI only.
+3. **Speaker labels.** Diarization, speaker assignment to words, turn assembly, speaker renumbering, and unit tests for that logic. CLI only, with `--speakers auto|none|1..8` (default auto). Also:
+   - Run the test recording with a fixed count of 3 and with Auto-detect. The earlier 50-minute test only tried a fixed count, so tune the default clustering threshold if Auto finds the wrong number.
+   - Measure peak memory with speaker identification on a recording over 90 minutes (see section 15, Long input).
+   - Settle open item 1 (long single-speaker turns) with the user.
    - Show: the labelled transcript of the test recording, with timings.
 4. **The app.** The WPF window wired to the worker: choose or drop a file, options, progress, cancel, transcript view, save and copy.
    - Show: the running app, tried on a real recording.
@@ -324,7 +330,7 @@ Work through these in order. Stop at the end of each one and show the results be
 - **Unit tests, no models needed:** chunk building (packing, splitting, padding), assigning speakers to words and smoothing, speaker renumbering, turn assembly, paragraphs with labels off, echo removal, formatting with and without timestamps, renaming and the Speakers line, the aligned writer (with simulated device clocks), and WAV header recovery.
 - **Integration tests** run only when `TALKTRACE_MODELS_DIR` points at the models (using the sherpa-onnx sample WAVs), plus local recordings when `TALKTRACE_TESTDATA` points at `testdata\`; otherwise they skip.
 - **Audio inputs:** WAV, MP3, M4A, a Teams or Zoom MP4 export, WMA, a stereo file, 44.1 and 48 kHz files, a corrupt file and a zero-length file.
-- **Long input:** one recording over 90 minutes, checking memory and time.
+- **Long input:** one recording over 90 minutes, checking memory and time. None exists yet; until one does, make one locally by joining the test recording to itself (about 98 minutes) and keep it in `testdata\`.
 - **Test recordings:** provided on request and kept in the gitignored `testdata\` folder. Nothing from it is ever committed.
 - **Offline check:** run a full job with networking turned off.
 - **Recording:** a Teams call while Teams has the mic open, once on the speakerphone, once on the Bluetooth headphones and once on the laptop's own speakers and mic; connecting the headphones mid-call; an in-person meeting; pause and resume; unplugging a device mid-call; long silences on the playback device; killing the app mid-recording, then recovering.
@@ -372,14 +378,40 @@ Work through these in order. Stop at the end of each one and show the results be
 
 Real-time (live) transcription, NPU or GPU acceleration, Whisper or any other ASR engine, summaries or any LLM features, a batch queue, an installer or MSIX package, code signing, auto-update, translation, capturing just one app's audio (such as only Teams) instead of all system audio, and any cloud service.
 
-## 18. Future: Microsoft Store release
+## 18. Keeping the Microsoft Store path open
 
-Not built until asked. Recorded here so v1 choices don't block it:
+A Microsoft Store release (MSIX, ARM64 and x64, possibly paid or with a Pro tier) is a possible future direction. It isn't built until asked, but **no v1 design choice may compromise it**. Check every milestone against the rules below. If a choice would break one, stop and put it to the user rather than working around it quietly.
 
-- No hard-coded install paths. Models load from next to the app or from app data; settings and logs live in app-data folders, which still work when packaged.
-- An MSIX bundle with ARM64 and x64 builds, the Fast profile models inside the package, and the `runFullTrust` and microphone capabilities. Confirm that microphone and system-audio capture both work when packaged.
-- An About screen listing every model and library with its licence and attribution (Parakeet is CC-BY-4.0). Re-confirm that each licence allows commercial use.
+**Rules**
+
+1. **Never write to the app's own folder.** A Store install is read-only. Settings, logs and downloaded models go under `%LOCALAPPDATA%\Talktrace`, recordings under Documents, and transcripts next to the recording. The `models\` folder next to the exe is only ever read.
+2. **Find files relative to the app or to a known folder.** Use `AppContext.BaseDirectory` or Windows known folders. No hard-coded install paths, and no reliance on the current directory or PATH. The app launches the worker from its own folder.
+3. **Keep the processor architecture in the build, not the code.** `Directory.Build.props` sets `win-arm64` as the default, and it must stay overridable with `-r win-x64`. No code may assume ARM64, and defaults such as the thread count must be safe on other processors. When x64 builds start, `verify-arm64.ps1` gets an architecture switch.
+4. **Commercial-use licences only.** Everything shipped must allow commercial use, with its attribution recorded in `THIRD-PARTY-NOTICES.md`. All current components do. Parakeet's CC-BY-4.0 licence requires attribution, which the Store build shows on an About screen.
+5. **No downloads at runtime, ever** (hard constraint 2). The Store build ships the Fast profile models inside the package. Extra models, such as Multilingual, would come as an app update or an MSIX optional package, never a download by the app.
+6. **Need only the `runFullTrust` and microphone capabilities.** Shared-mode WASAPI capture, including loopback, works in a packaged full-trust app. Don't add features that need broader capabilities, such as unrestricted file-system access.
+7. **Expect app data to be virtualised.** A packaged app's writes under `%LOCALAPPDATA%` land in its private package folder, which other programs can't see. Development already ran into this: the Claude desktop app is packaged, so files Claude Code wrote there were invisible to the user's own terminal (see CLAUDE.md). So never ask the user to find a file by its AppData path: give in-app Open folder and Copy details actions instead. Never exchange files with outside programs through AppData.
+8. **Keep version numbers MSIX-compatible.** Use three parts now (`0.1.0`), which map to MSIX's four-part form (`0.1.0.0`).
+9. **Keep licensing out of v1.** When a trial or Pro check is added, it sits behind one interface so the unpackaged build runs without it. The Store APIs (`StoreContext`) need a Windows-SDK-versioned target framework, such as `net10.0-windows10.0.19041.0`; that's a one-line change when the time comes.
+
+**What a Store release adds** (Milestones 8 and 9, when asked):
+
+- An MSIX bundle with ARM64 and x64 builds and the Fast profile models inside. Confirm that microphone and system-audio capture both work when packaged.
+- An About screen listing every model and library with its licence and attribution.
+- Trial or Pro licensing through `StoreContext`, working offline once a licence is cached.
+- A privacy policy at a public URL, a recording-consent note in the app and the listing, the listing materials, and a test with a private audience before public release.
+
+The business decisions for a Store release (name clearance, pricing, account type, tax) are the user's and are kept outside this public repository.
 
 ## 19. Open items
 
-None.
+1. **Long single-speaker turns (decide in Milestone 3).** With speaker labels on, each turn is one paragraph however long, so a long monologue becomes a wall of text. A length-based split (a new paragraph at the first sentence end after about 100 words) was tried with labels off in Milestone 2 and rejected because it cut paragraphs off mid-thought. In Milestone 3, look at real turn lengths on the test recording, then put the options to the user (for example: leave turns whole, or split only at long pauses within a turn) rather than choosing one.
+
+## 20. References
+
+- sherpa-onnx: [GitHub](https://github.com/k2-fsa/sherpa-onnx), [documentation](https://k2-fsa.github.io/sherpa/onnx/), [C# wrapper sources](https://github.com/k2-fsa/sherpa-onnx/tree/master/scripts/dotnet) and [.NET examples](https://github.com/k2-fsa/sherpa-onnx/tree/master/dotnet-examples)
+- [sherpa-onnx win-arm64 runtime package on NuGet](https://www.nuget.org/packages/org.k2fsa.sherpa.onnx.runtime.win-arm64)
+- [sherpa-onnx speaker diarization models](https://k2-fsa.github.io/sherpa/onnx/speaker-diarization/models.html)
+- [Parakeet TDT 0.6B v2 in sherpa-onnx](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/nemo/parakeet-tdt-0.6b-v2.html)
+- [NAudio on GitHub](https://github.com/naudio/NAudio) (the official repository; ignore forks)
+- [Choose a distribution path for your Windows app](https://learn.microsoft.com/windows/apps/package-and-deploy/choose-distribution-path), [Microsoft Store policies](https://learn.microsoft.com/windows/uwp/publish/store-policies) and [free developer registration for individuals](https://blogs.windows.com/windowsdeveloper/2025/09/10/free-developer-registration-for-individual-developers-on-microsoft-store/), for the future Store release
