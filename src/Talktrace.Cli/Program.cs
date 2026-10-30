@@ -1,103 +1,202 @@
 using System.Diagnostics;
 using System.Globalization;
-using Talktrace.Core.Asr;
-using Talktrace.Core.Audio;
+using Talktrace.Core;
 using Talktrace.Core.Models;
+using Talktrace.Core.Transcripts;
 
-// Smoke test for now: transcribe one WAV file with the Fast profile and show word times.
-// The full CLI (DESIGN.md, section 11) arrives with the pipeline in Milestones 2 and 3.
+// Talktrace command line (DESIGN.md section 11): transcribe one file and print per-stage timings.
+// Speaker labels arrive in Milestone 3; until then only --speakers none works.
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 
-const string Usage = "Usage: Talktrace.Cli.exe <file.wav> [--threads <n>] [--words]";
+const string Usage = """
+    Usage: Talktrace.Cli.exe <file> [--speakers none] [--model fast|multilingual]
+                             [--timestamps] [--out <path>] [--threads <n>]
+           Talktrace.Cli.exe <file> --benchmark [--minutes <n>]
+    """;
 
 string? input = null;
-int threads = Math.Max(1, Environment.ProcessorCount - 1);
-bool showWords = false;
+var options = new TranscribeOptions();
+bool benchmark = false;
+double benchmarkMinutes = 10;
 
-for (int i = 0; i < args.Length; i++)
+try
 {
-    switch (args[i])
+    for (int i = 0; i < args.Length; i++)
     {
-        case "--threads" when i + 1 < args.Length && int.TryParse(args[i + 1], out int n) && n > 0:
-            threads = n;
-            i++;
-            break;
-        case "--words":
-            showWords = true;
-            break;
-        case "-h" or "--help":
-            Console.WriteLine(Usage);
-            return 0;
-        default:
-            if (input is null && !args[i].StartsWith('-'))
-            {
-                input = args[i];
-                break;
-            }
-            Console.Error.WriteLine($"Unexpected argument: {args[i]}");
-            Console.Error.WriteLine(Usage);
-            return 2;
-    }
-}
+        string arg = args[i];
+        string Value() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"{arg} needs a value.");
 
-if (input is null)
+        switch (arg)
+        {
+            case "--speakers":
+                string speakers = Value();
+                if (speakers != "none")
+                    throw new ArgumentException("Speaker labels aren't available yet; use --speakers none.");
+                options = options with { Speakers = SpeakerSetting.None };
+                break;
+            case "--model":
+                options = options with
+                {
+                    Profile = Value() switch
+                    {
+                        "fast" => ModelProfile.Fast,
+                        "multilingual" => ModelProfile.Multilingual,
+                        var other => throw new ArgumentException($"Unknown model: {other}. Use fast or multilingual."),
+                    },
+                };
+                break;
+            case "--timestamps":
+                options = options with { IncludeTimestamps = true };
+                break;
+            case "--out":
+                options = options with { OutputPath = Value() };
+                break;
+            case "--threads":
+                options = options with { NumThreads = PositiveInt(Value(), arg) };
+                break;
+            case "--benchmark":
+                benchmark = true;
+                break;
+            case "--minutes":
+                benchmarkMinutes = PositiveInt(Value(), arg);
+                break;
+            case "-h" or "--help":
+                Console.WriteLine(Usage);
+                return 0;
+            default:
+                if (input is not null || arg.StartsWith('-'))
+                    throw new ArgumentException($"Unexpected argument: {arg}");
+                input = arg;
+                break;
+        }
+    }
+
+    if (input is null)
+        throw new ArgumentException("No input file given.");
+}
+catch (ArgumentException e)
 {
+    Console.Error.WriteLine(e.Message);
     Console.Error.WriteLine(Usage);
     return 2;
 }
 
-ModelProfile profile = ModelProfile.Fast;
-string? modelDirectory = ModelLocator.Find(profile.AsrDirectory);
-if (modelDirectory is null)
-{
-    Console.Error.WriteLine($"The {profile.DisplayName} model isn't installed. Looked in:");
-    foreach (string root in ModelLocator.SearchRoots())
-        Console.Error.WriteLine($"  {root}");
-    Console.Error.WriteLine(@"Run scripts\get-models.ps1 to download it.");
-    return 1;
-}
-
 try
 {
-    AudioClip audio = WavReader.Read(input);
-
-    var clock = Stopwatch.StartNew();
-    using var recognizer = new ParakeetRecognizer(modelDirectory, threads);
-    TimeSpan loadTime = clock.Elapsed;
-
-    clock.Restart();
-    RecognizedText result = recognizer.Recognize(audio.Samples, audio.SampleRate);
-    TimeSpan decodeTime = clock.Elapsed;
-
-    Console.WriteLine($"Model: {profile.DisplayName} · Threads: {threads}");
-    Console.WriteLine($"Audio: {audio.DurationSeconds:F2} s at {audio.SampleRate} Hz");
-    Console.WriteLine($"Load: {loadTime.TotalSeconds:F2} s · Decode: {decodeTime.TotalSeconds:F2} s · " +
-                      $"Real-time factor: {decodeTime.TotalSeconds / audio.DurationSeconds:F3}");
-    Console.WriteLine();
-    Console.WriteLine(result.Text);
-
-    if (showWords)
-    {
-        Console.WriteLine();
-        if (!result.HasWordTimes)
-        {
-            Console.WriteLine("No word times: the model returned no token timestamps.");
-        }
-        else
-        {
-            Console.WriteLine("Word times (seconds):");
-            foreach (Word word in result.Words)
-                Console.WriteLine($"  {word.Start,7:F2} - {word.End,7:F2}  {word.Text}");
-        }
-    }
-
+    if (benchmark)
+        RunBenchmark(input, options, benchmarkMinutes);
+    else
+        await RunTranscription(input, options);
     return 0;
 }
-catch (Exception e) when (e is IOException or InvalidDataException or NotSupportedException or UnauthorizedAccessException)
+catch (TalktraceException e)
 {
     Console.Error.WriteLine(e.Message);
     return 1;
+}
+
+static async Task RunTranscription(string input, TranscribeOptions options)
+{
+    var progress = new ConsoleProgress();
+    TranscriptResult result = await Transcriber.TranscribeAsync(input, options, progress, CancellationToken.None);
+    progress.Finish();
+
+    Console.WriteLine($"Saved: {result.SavedPath}");
+    Console.WriteLine($"Audio: {TranscriptFormatter.FormatDuration(result.Duration)} · Chunks: {result.ChunkCount} · " +
+                      $"Paragraphs: {result.Turns.Count} · Model: {result.ModelName} · " +
+                      $"Threads: {options.NumThreads}");
+    Console.WriteLine();
+    foreach (StageTiming timing in result.Timings)
+        Console.WriteLine($"  {StageName(timing.Stage),-20}{Seconds(timing.Elapsed),9}");
+    Console.WriteLine($"  {"Total",-20}{Seconds(result.TotalElapsed),9}   real-time factor {result.RealTimeFactor:F3}");
+    Console.WriteLine();
+    Console.WriteLine($"Peak memory: {Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024):N0} MB");
+}
+
+static void RunBenchmark(string input, TranscribeOptions options, double minutes)
+{
+    Console.WriteLine($"Preparing: reading the audio and finding speech in the first {minutes:0} minutes...");
+    AsrBenchmark bench = AsrBenchmark.Prepare(input, options, minutes);
+    Console.WriteLine($"Timing transcription of {bench.ChunkCount} chunks covering {bench.CoveredSeconds / 60:F1} minutes.");
+    Console.WriteLine();
+    Console.WriteLine("  Threads  Batch      Time   Real-time factor");
+
+    int bestThreads = 0;
+    TimeSpan bestTime = TimeSpan.MaxValue;
+    foreach (int threads in new[] { 4, 6, 8, 11 })
+    {
+        TimeSpan time = bench.Measure(threads, batchSize: 1);
+        Print(threads, 1, time);
+        if (time < bestTime)
+            (bestThreads, bestTime) = (threads, time);
+    }
+
+    foreach (int batch in new[] { 2, 4, 8 })
+        Print(bestThreads, batch, bench.Measure(bestThreads, batch));
+
+    Console.WriteLine();
+    Console.WriteLine($"Peak memory: {Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024):N0} MB");
+
+    void Print(int threads, int batch, TimeSpan time) =>
+        Console.WriteLine($"  {threads,7}  {batch,5}  {Seconds(time),8}   {time.TotalSeconds / bench.CoveredSeconds,16:F3}");
+}
+
+static int PositiveInt(string value, string name) =>
+    int.TryParse(value, out int n) && n > 0 ? n : throw new ArgumentException($"{name} needs a positive whole number.");
+
+static string Seconds(TimeSpan time) => $"{time.TotalSeconds:F1} s";
+
+static string StageName(TranscribeStage stage) => stage switch
+{
+    TranscribeStage.ReadingAudio => "Reading audio",
+    TranscribeStage.FindingSpeech => "Finding speech",
+    TranscribeStage.IdentifyingSpeakers => "Identifying speakers",
+    TranscribeStage.Transcribing => "Transcribing",
+    TranscribeStage.Saving => "Saving",
+    _ => stage.ToString(),
+};
+
+/// <summary>Shows the current stage on one console line.</summary>
+sealed class ConsoleProgress : IProgress<TranscribeProgress>
+{
+    private readonly object _lock = new();
+    private TranscribeStage? _stage;
+
+    public void Report(TranscribeProgress value)
+    {
+        lock (_lock)
+        {
+            if (Console.IsOutputRedirected)
+            {
+                if (value.Stage != _stage)
+                    Console.WriteLine(Describe(value));
+            }
+            else
+            {
+                Console.Write($"\r{Describe(value),-60}");
+            }
+            _stage = value.Stage;
+        }
+    }
+
+    public void Finish()
+    {
+        lock (_lock)
+        {
+            if (!Console.IsOutputRedirected)
+                Console.WriteLine();
+        }
+    }
+
+    private static string Describe(TranscribeProgress p) => p.Stage switch
+    {
+        TranscribeStage.ReadingAudio => "Reading audio...",
+        TranscribeStage.FindingSpeech => $"Finding speech... {p.Done}%",
+        TranscribeStage.Transcribing => $"Transcribing {p.Done} of {p.Total}",
+        TranscribeStage.Saving => "Saving...",
+        _ => p.Stage.ToString(),
+    };
 }

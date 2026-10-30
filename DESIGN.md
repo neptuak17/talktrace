@@ -45,6 +45,8 @@ Non-negotiable. If one can't be met, stop and say so.
 | No Visual C++ runtime needs shipping. | Milestone 1 found that sherpa-onnx and ONNX Runtime import no Visual C++ runtime DLLs, and .NET's own copy for WPF ships in the publish folder. |
 | ARM64X files pass the ARM64 check. | .NET's WPF ships `vcruntime140_cor3.dll` as ARM64X. Its header says ARM64 and an ARM64 process runs its native ARM64 code, so nothing is emulated. |
 | Tests use xUnit v3 on Microsoft.Testing.Platform. | The .NET 10 SDK no longer runs xUnit v3 through the older VSTest runner; this also drops two test packages. |
+| The recognizer uses 6 threads by default and decodes one chunk at a time. | Milestone 2 benchmark, first 10 minutes of the test recording: 4, 6, 8 and 11 threads gave real-time factors of 0.030, 0.029, 0.031 and 0.033. Batching 2, 4 or 8 chunks per call was slower (0.033 to 0.036). |
+| With speaker labels off, paragraphs split at pauses only, never on length. | A 100-word cap ending paragraphs at the next sentence end was tried in Milestone 2 and cut paragraphs off mid-thought. Long paragraphs are the accepted trade-off. |
 
 ## 4. Technology
 
@@ -53,7 +55,7 @@ Non-negotiable. If one can't be met, stop and say so.
 | Language and runtime | C# on .NET 10 (LTS) | `net10.0-windows`, runtime identifier `win-arm64`, self-contained. SDK pinned in `global.json`. |
 | UI | WPF, single window, light MVVM with CommunityToolkit.Mvvm | No third-party UI frameworks. Follow the Windows light/dark setting with WPF's built-in Fluent theme (`ThemeMode="System"`, marked experimental); if it misbehaves, light only. |
 | Speech engine | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) via NuGet: `org.k2fsa.sherpa.onnx` with the native `org.k2fsa.sherpa.onnx.runtime.win-arm64` | Offline ASR (Parakeet), Silero VAD and offline speaker diarization, all on ONNX Runtime. Start from its `dotnet-examples` folder. |
-| Audio decoding | NAudio `MediaFoundationReader` | Uses the Media Foundation codecs built into Windows: .wav, .mp3, .m4a, .mp4, .wma, and the audio track of video files. Confirm which NAudio 3 package holds Media Foundation. |
+| Audio decoding | NAudio `MediaFoundationReader` and `MediaFoundationResampler` (package NAudio.Wasapi 3.3.0) | Uses the Media Foundation codecs built into Windows: .wav, .mp3, .m4a, .mp4, .wma, and the audio track of video files. |
 | Audio capture | NAudio `WasapiCapture` (microphone), `WasapiLoopbackCapture` (system audio), `WasapiOut` (silence keep-alive) | Shared mode only, so capture never blocks Teams or other apps. |
 | Logging | A small hand-written file logger | No dependency. |
 | Settings | System.Text.Json | |
@@ -114,12 +116,12 @@ Core exposes one entry point that the CLI and the worker both call:
 Core runs these stages in order. Every threshold lives in one options class so it can be tuned later. Call-mode recordings take the two-track path in section 9.
 
 1. **Decode.** Open the file with Media Foundation, downmix to mono, resample to 16 kHz, convert to float32 in −1 to 1. Holding the whole recording in memory is fine (about 230 MB an hour). Record the duration. An unsupported or corrupt file gets a clear error that names the file type.
-2. **Find speech.** Silero VAD over the whole track gives the speech regions. Drop regions shorter than about 0.3 s; very short clips make the recognizer invent text.
-3. **Build chunks.** Pack consecutive speech regions into chunks of at most about 25 s, splitting at the gaps between them. A single region longer than 25 s is split at its quietest point (energy minimum). Pad each chunk by about 0.15 s on each side, clamped to the recording's bounds.
+2. **Find speech.** Silero VAD over the whole track gives the speech regions. Drop regions shorter than about 0.3 s; very short clips make the recognizer invent text. After about 20 s of continuous speech the VAD splits at the next short pause, which keeps regions near chunk size.
+3. **Build chunks.** Pack consecutive speech regions into chunks of at most about 25 s, splitting at the gaps between them, and start a new chunk after any pause longer than about 2 s so chunks don't carry long silences. A single region longer than 25 s is split at its quietest 100 ms (energy minimum) in its second half. Pad each chunk by about 0.15 s on each side, clamped to the recording's bounds and to half the gap to the next chunk, so neighbouring chunks never overlap and no word is transcribed twice.
 4. **Find who spoke when** (speaker labels on). Run sherpa-onnx `OfflineSpeakerDiarization` on the whole track: pyannote segmentation 3.0, the speaker-embedding model, fast clustering. If a speaker count was chosen, set the cluster count to it; on Auto, use the clustering threshold (sherpa-onnx's default, adjustable under Advanced). Wire its progress callback to the progress bar. Output: a list of (start, end, speaker).
-5. **Transcribe.** Create one `OfflineRecognizer` for the chosen model and reuse it for every chunk, each chunk as its own stream. Keep the text and the token timestamps, and group tokens into words with absolute start and end times. Progress = chunks done out of total. Thread count comes from a setting; its default is set by the Milestone 2 benchmark. If decoding several streams in one batch is faster, adopt it; otherwise don't.
+5. **Transcribe.** Create one `OfflineRecognizer` for the chosen model and reuse it for every chunk, each chunk as its own stream. Keep the text and the token timestamps, and group tokens into words with absolute start and end times. Progress = chunks done out of total. Thread count comes from a setting, default 6 (fastest in the Milestone 2 benchmark). Chunks are decoded one at a time; batching was slower.
 6. **Assign speakers to words.** Each word takes the diarization speaker that overlaps it most. A word that falls in a gap between speaker segments takes the nearest segment within about 1 s, otherwise the previous word's speaker. A run of words shorter than about 0.5 s, inside another speaker's run with no pause on either side, is given to that speaker. With speaker labels off, every word gets one speaker.
-7. **Assemble turns.** Consecutive words from the same speaker form one turn. With speaker labels off, start a new paragraph at pauses longer than about 2 s. Renumber speakers in order of first appearance, so the first voice heard is Speaker 1. Trim whitespace and drop empty turns.
+7. **Assemble turns.** Consecutive words from the same speaker form one turn. With speaker labels off, start a new paragraph at pauses longer than about 2 s, and only there. Renumber speakers in order of first appearance, so the first voice heard is Speaker 1. Trim whitespace and drop empty turns.
 8. **Format and save** (section 11). Auto-save the moment the job finishes.
 
 **Fallback if token timestamps aren't available** through the C# API (checked in Milestone 1): transcribe the diarization segments themselves instead. Sort them, merge same-speaker segments less than about 1 s apart, drop segments under 0.3 s, split any over 25 s at the quietest point, pad by 0.15 s, transcribe each, and go straight to step 7.
@@ -259,7 +261,7 @@ Dana: Great, go ahead.
 - **Speakers line:** every speaker in order of first appearance, by current name; unrenamed speakers show as Speaker N. Omitted when speaker labels are off.
 - **With timestamps:** each turn starts with its start time: `[00:03:12] Speaker 1: …`. For recordings, times are from the start of the recording.
 - **Renamed speakers:** the chosen names replace the labels everywhere.
-- **Speaker labels off:** no labels; paragraphs split at pauses longer than about 2 s.
+- **Speaker labels off:** no labels; paragraphs split at pauses longer than about 2 s, and only there.
 
 The CLI writes the same format:
 
@@ -276,7 +278,8 @@ When it finishes, the CLI prints per-stage timings and the real-time factor.
 - **Cancellation.** Within about 2 s at any stage (section 6).
 - **Native resources.** Dispose recognizers, diarizers and streams deterministically in the worker; the process exiting after each job frees anything left.
 - **Speed target.** Fast profile, 60-minute 3-speaker recording, under 20 minutes on this machine. Baseline from the 50-minute test: about 2 minutes transcription and about 6 minutes speaker identification. Measure in Milestones 2 and 3; if far off, profile and report where the time goes before optimising.
-- **Threads.** Benchmark 4, 6, 8 and 11 threads in Milestone 2 and make the fastest the default. (The 50-minute test used 6.)
+- **Milestone 2 result** (speaker labels off, 49-minute M4A test recording, quiet machine): reading audio 13 s, finding speech 10 s, transcribing 88 s; 110 s in total, real-time factor 0.037, peak memory 1.86 GB.
+- **Threads.** 6 threads was fastest in the Milestone 2 benchmark and is the default. `Talktrace.Cli <file> --benchmark` re-runs the comparison, for example after a sherpa-onnx upgrade.
 - **Memory target.** Under about 2.5 GB peak in the worker for a 90-minute recording on the Fast profile. Report the actual figure.
 - **Logging.** `%LOCALAPPDATA%\Talktrace\logs\`, one file per day, kept for 14 days, shared by the app and the worker (each line tagged with its process). Log app version, model profile, thread count, audio duration, file name and type, wall time per stage, real-time factor, and errors with stack traces. **Never** log transcript text or audio.
 
@@ -351,6 +354,7 @@ Work through these in order. Stop at the end of each one and show the results be
 - **Speaker errors.** Diarization sometimes splits one person into two speakers, merges two similar voices, or pins a short interjection on the wrong person. The speaker-count option and the clustering threshold are the fixes; the README explains both.
 - **Diarization can't be cancelled in-process.** sherpa-onnx ignores the progress callback's return value. This is why jobs run in a worker.
 - **Parakeet model type.** Configure it as a NeMo transducer, or let sherpa-onnx detect the type from the metadata.
+- **Benchmark on a quiet machine.** Stage timings varied up to 3× when other heavy work (a build, a test run) ran at the same time.
 - **Model paths must be plain ASCII.** sherpa-onnx's C# wrapper passes paths as ANSI strings, so a model folder under a user name with accented characters may not open. Talktrace checks and says so; `TALKTRACE_MODELS_DIR` can point somewhere else.
 - **The release name `speaker-recongition-models`** is misspelled in sherpa-onnx's own URLs. Copy it exactly.
 - **Wrong native package.** An ARM64 process can't load x64 DLLs: a win-x64 runtime package builds but fails at load time with a DLL or bad-image error. Always use the win-arm64 runtime package.

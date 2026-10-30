@@ -4,7 +4,7 @@ A native Windows on ARM64 desktop app that turns meeting recordings into speaker
 
 **[DESIGN.md](DESIGN.md) is the source of truth.** Read it before changing anything, and update it when a decision changes. Work milestone by milestone (DESIGN.md section 14) and stop at the end of each one for review.
 
-Progress: Milestone 1 (scaffold and smoke test) done and reviewed. Next: Milestone 2.
+Progress: Milestones 1 (scaffold) and 2 (transcription without speakers) done and reviewed. Next: Milestone 3 (speaker labels).
 
 ## Hard constraints
 
@@ -42,8 +42,11 @@ dotnet publish src/Talktrace.App -c Release -r win-arm64 --self-contained true -
 dotnet publish src/Talktrace.Cli -c Release -r win-arm64 --self-contained true -o artifacts/publish
 .\scripts\verify-arm64.ps1
 
-.\artifacts\publish\Talktrace.Cli.exe <file.wav> --words
+.\artifacts\publish\Talktrace.Cli.exe <recording> [--timestamps] [--threads <n>]   # saves "<name> - transcript.txt"
+.\artifacts\publish\Talktrace.Cli.exe <recording> --benchmark [--minutes 10]        # thread and batch timings
 ```
+
+Test recordings live in the gitignored `testdata\` folder. Never print, log or commit their transcripts.
 
 ## Notes
 

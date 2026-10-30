@@ -14,12 +14,13 @@ dotnet build -c Release
 dotnet test -c Release
 ```
 
-To try transcription on the sample file that comes with the model:
+To transcribe a recording from the command line (speaker labels aren't available yet):
 
 ```powershell
-.\src\Talktrace.Cli\bin\Release\net10.0-windows\win-arm64\Talktrace.Cli.exe `
-    "$env:LOCALAPPDATA\Talktrace\models\sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8\test_wavs\0.wav" --words
+.\src\Talktrace.Cli\bin\Release\net10.0-windows\win-arm64\Talktrace.Cli.exe "C:\path\to\meeting.m4a" --timestamps
 ```
+
+The transcript is saved next to the recording as `<name> - transcript.txt`, and the CLI prints how long each stage took.
 
 ## Licence
 

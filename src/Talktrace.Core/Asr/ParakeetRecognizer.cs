@@ -2,6 +2,9 @@ using SherpaOnnx;
 
 namespace Talktrace.Core.Asr;
 
+/// <summary>A piece of the recording to transcribe, and where it starts in the recording.</summary>
+public sealed record AudioSlice(float[] Samples, double OffsetSeconds);
+
 /// <summary>Text and word times for one piece of audio.</summary>
 /// <param name="HasWordTimes">False if the model returned no token timestamps.</param>
 public sealed record RecognizedText(string Text, IReadOnlyList<Word> Words, bool HasWordTimes);
@@ -36,13 +39,41 @@ public sealed class ParakeetRecognizer : IDisposable
 
     /// <param name="samples">Mono audio in the range -1 to 1.</param>
     /// <param name="offsetSeconds">Where this audio starts in the recording, added to every word time.</param>
-    public RecognizedText Recognize(float[] samples, int sampleRate, double offsetSeconds = 0)
-    {
-        using OfflineStream stream = _recognizer.CreateStream();
-        stream.AcceptWaveform(sampleRate, samples);
-        _recognizer.Decode(stream);
-        OfflineRecognizerResult result = stream.Result;
+    public RecognizedText Recognize(float[] samples, int sampleRate, double offsetSeconds = 0) =>
+        Recognize([new AudioSlice(samples, offsetSeconds)], sampleRate)[0];
 
+    /// <summary>Decodes several pieces of audio in one call, one stream each.</summary>
+    public IReadOnlyList<RecognizedText> Recognize(IReadOnlyList<AudioSlice> slices, int sampleRate)
+    {
+        var streams = new List<OfflineStream>(slices.Count);
+        try
+        {
+            foreach (AudioSlice slice in slices)
+            {
+                OfflineStream stream = _recognizer.CreateStream();
+                streams.Add(stream);
+                stream.AcceptWaveform(sampleRate, slice.Samples);
+            }
+
+            if (streams.Count == 1)
+                _recognizer.Decode(streams[0]);
+            else
+                _recognizer.Decode(streams);
+
+            var results = new RecognizedText[slices.Count];
+            for (int i = 0; i < slices.Count; i++)
+                results[i] = ToRecognizedText(streams[i].Result, slices[i].OffsetSeconds);
+            return results;
+        }
+        finally
+        {
+            foreach (OfflineStream stream in streams)
+                stream.Dispose();
+        }
+    }
+
+    private static RecognizedText ToRecognizedText(OfflineRecognizerResult result, double offsetSeconds)
+    {
         if (result.Timestamps is null)
             return new RecognizedText(result.Text.Trim(), [], HasWordTimes: false);
 

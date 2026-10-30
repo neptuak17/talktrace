@@ -8,6 +8,7 @@ Talktrace uses the open-source components below. The models are downloaded separ
 | --- | --- | --- |
 | sherpa-onnx 2.0.1 (`org.k2fsa.sherpa.onnx`, `org.k2fsa.sherpa.onnx.runtime.win-arm64`) | Apache-2.0 | https://github.com/k2-fsa/sherpa-onnx |
 | ONNX Runtime, included in the sherpa-onnx runtime package | MIT | https://github.com/microsoft/onnxruntime |
+| NAudio 3.3.0 (`NAudio.Wasapi`, `NAudio.Core`) | MIT | https://github.com/naudio/NAudio |
 | .NET runtime and WPF, included in the self-contained app | MIT | https://github.com/dotnet/runtime, https://github.com/dotnet/wpf |
 
 ## Models
