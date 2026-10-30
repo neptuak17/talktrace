@@ -1,0 +1,377 @@
+# Talktrace — Design
+
+The working design for Talktrace. It replaces the original build brief, which is not kept.
+Last updated 2026-10-30.
+
+## 1. Goal
+
+Talktrace is a small native Windows desktop app that turns a meeting recording into a plain-text transcript with speaker labels (Speaker 1, Speaker 2, and so on). Pick an existing recording or record a meeting in the app, click Transcribe, and get a .txt file.
+
+- **User:** an independent IT consultant, a few times a month, on recordings of client meetings: typically 30–90 minutes, English, 2–6 speakers.
+- **Machine:** Windows 11 Home on ARM64 (Snapdragon X Elite X1E78100, 12 cores, 32 GB RAM). The existing local transcription apps have no working native ARM64 build, which is why this app exists.
+- **Why local:** the recordings are confidential client conversations. Audio and transcripts never leave the machine.
+- **Quality bar:** a dependable personal tool, not a product. Plain, clean, reliable. No accounts, no cloud, no extras.
+
+## 2. Hard constraints
+
+Non-negotiable. If one can't be met, stop and say so.
+
+1. **Native ARM64 only.** Every executable and native DLL ships as ARM64: not x64, not ARM64EC. Nothing runs under emulation.
+2. **Fully offline at runtime.** No network calls of any kind: no telemetry, update checks, crash reporting or downloads. The only network access is `scripts/get-models.ps1`, run deliberately.
+3. **No Python, PyTorch or ffmpeg.** Self-contained .NET publish. Running on a clean Windows install is a goal, not a hard requirement: if a Visual C++ runtime dependency turns up, ship those DLLs next to the app.
+4. **CPU inference only** for v1. No NPU, GPU, DirectML or QNN.
+5. **Open-source components** whose licences allow personal use, each recorded in `THIRD-PARTY-NOTICES.md`.
+6. **No admin rights** to install or run the app. Per-user, runs from any folder. (Developer tools such as the .NET SDK are exempt.)
+7. **Nothing private in logs or source control.** Logs may hold timings, durations, file names, paths and errors, never transcript text or audio. The GitHub repo is public: recordings, transcripts, test data and models are never committed (see the `.gitignore` rules in section 5).
+
+## 3. Decisions
+
+| Decision | Why |
+| --- | --- |
+| sherpa-onnx and Parakeet are settled. No evaluation of other engines, ASR models or embedding models. | Tested on a 50-minute meeting: transcription took about 2 minutes, speaker identification about 3× that, and accuracy was good. |
+| The Multilingual profile uses Parakeet TDT 0.6B v3. Whisper is dropped. | Same engine and model type as the Fast profile, so one code path. Meetings are English; Talktrace supports whatever Parakeet supports. |
+| Transcription jobs run in a worker process (`Talktrace.Cli --worker`), not in the app process. | sherpa-onnx ignores the diarization progress callback's return value, so speaker identification can't be cancelled in-process. A worker gives instant cancel, crash isolation and clean memory per job. |
+| Speakers are assigned word by word, using Parakeet's token timestamps. | Cutting the audio at speaker changes clips words at the boundaries and leaves short clips with little context. Fallback in section 7 if timestamps aren't available. |
+| While recording, Talktrace plays silence on the monitored playback device. | Windows delivers no system audio while nothing is playing. Playing silence keeps it flowing, which removes gap-filling and lets NAudio's standard capture classes do the job. |
+| Clock drift is handled by a writer that runs on the microphone's clock and occasionally drops or repeats one system-audio sample. | The two device clocks drift about 0.3–0.5 s apart over 90 minutes. The writer has to pair samples from both devices anyway, so the correction is a few lines. |
+| One job at a time. No transcribing while recording. | Meetings are never back to back with a transcription running. |
+| The transcript header lists speakers by name. | Renamed speakers show up in the header, not just a count. |
+| Package versions are pinned exactly: sherpa-onnx 2.0.1 (fallback 1.13.8), NAudio 3.3.0. | 2.0.x fixes a VAD crash on long audio and returns NULL instead of crashing when a model fails to load. |
+| Models are looked for next to the exe, then in `%LOCALAPPDATA%\Talktrace\models`. | Upgrading means unzipping a new folder without moving about 1 GB of models, and it still works when the install folder is read-only (a future MSIX package). |
+| Speaker embeddings use `nemo_en_titanet_small.onnx`. | Used in the 50-minute test with good results. |
+| Three call setups are supported: a combined speakerphone in the home office, Bluetooth headphones with a built-in mic when travelling, and the laptop's own speakers and mic. Talktrace remembers the mode for each device. | All three are in use. See section 9. |
+| The repo stays public with no licence for now. | |
+| The repository layout in section 5 is confirmed. | |
+
+## 4. Technology
+
+| Layer | Choice | Notes |
+| --- | --- | --- |
+| Language and runtime | C# on .NET 10 (LTS) | `net10.0-windows`, runtime identifier `win-arm64`, self-contained. SDK pinned in `global.json`. |
+| UI | WPF, single window, light MVVM with CommunityToolkit.Mvvm | No third-party UI frameworks. Follow the Windows light/dark setting with WPF's built-in Fluent theme (`ThemeMode="System"`, marked experimental); if it misbehaves, light only. |
+| Speech engine | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) via NuGet: `org.k2fsa.sherpa.onnx` with the native `org.k2fsa.sherpa.onnx.runtime.win-arm64` | Offline ASR (Parakeet), Silero VAD and offline speaker diarization, all on ONNX Runtime. Start from its `dotnet-examples` folder. |
+| Audio decoding | NAudio `MediaFoundationReader` | Uses the Media Foundation codecs built into Windows: .wav, .mp3, .m4a, .mp4, .wma, and the audio track of video files. Confirm which NAudio 3 package holds Media Foundation. |
+| Audio capture | NAudio `WasapiCapture` (microphone), `WasapiLoopbackCapture` (system audio), `WasapiOut` (silence keep-alive) | Shared mode only, so capture never blocks Teams or other apps. |
+| Logging | A small hand-written file logger | No dependency. |
+| Settings | System.Text.Json | |
+| Tests | xUnit | |
+
+All package versions live in `Directory.Packages.props`, pinned exactly; no floating ranges.
+
+## 5. Repository layout
+
+```
+Talktrace.slnx                  solution (.NET 10's default format)
+global.json                     pins the .NET 10 SDK
+Directory.Build.props           shared settings: target framework, win-arm64, nullable, version
+Directory.Packages.props        every package version, pinned
+.gitignore  .gitattributes  .editorconfig
+src/
+  Talktrace.Core/               transcription pipeline: decoding, VAD, diarization, ASR, speaker
+                                assignment, turns, formatting, options, sidecar format, worker
+                                protocol. No UI and no capture code.
+  Talktrace.Recording/          microphone and system-audio capture, silence keep-alive, aligned
+                                WAV writer, sidecar writing, crash recovery. References Core.
+  Talktrace.App/                WPF app. References Core and Recording. Runs jobs through the worker.
+  Talktrace.Cli/                console app: CLI, benchmarking, and the --worker mode the app launches.
+tests/
+  Talktrace.Tests/              unit tests (no models needed) and integration tests (skip unless
+                                TALKTRACE_MODELS_DIR is set)
+scripts/
+  get-models.ps1  verify-arm64.ps1  package.ps1  install-shortcut.ps1
+README.md  DESIGN.md  CLAUDE.md  THIRD-PARTY-NOTICES.md
+```
+
+`CLAUDE.md` holds the build, test and publish commands and a short copy of the hard constraints, so later sessions stay inside them.
+
+Because the repo is public, `.gitignore` ignores at least: `bin/`, `obj/`, `artifacts/`, `models/`, `testdata/`, `.vs/`, `*.user`, every audio and video type (`*.wav *.mp3 *.m4a *.mp4 *.wma *.aac *.flac *.ogg *.opus *.webm`), `*.talktrace.json`, `*transcript*.txt`, `*.log`, and the original build brief.
+
+## 6. Architecture
+
+Two processes:
+
+- **Talktrace.App** (WPF) owns the window, settings, recording (the Recording library runs in the app process), the speakers panel and saving.
+- **Talktrace.Cli in worker mode** runs one transcription job and exits.
+
+Core exposes one entry point that the CLI and the worker both call:
+`Task<TranscriptResult> TranscribeAsync(string path, TranscribeOptions options, IProgress<TranscribeProgress> progress, CancellationToken ct)`.
+
+**Worker protocol**
+
+- The app starts `Talktrace.Cli.exe --worker` with no window, at below-normal priority, and sends the job (input path, options, output path) as JSON on stdin.
+- The worker writes one JSON message per line to stdout: `progress` (stage, done, total), `result` (turns with start, end, speaker and text; speakers; duration; stage timings) or `error` (a plain-language message plus details).
+- The worker writes the auto-save .txt itself before it sends `result`, so a finished job is never lost, even if the app has gone.
+- **Cancel:** the app sends `cancel` on stdin and the worker stops at the next chunk. If it hasn't exited within about 2 s (for example, during speaker identification), the app kills it. Partial results are discarded.
+- **Crash:** if the worker exits without a `result`, the app shows "Transcription stopped unexpectedly" and logs the exit code.
+
+**One thing at a time.** One job at a time, and no transcribing while recording: Transcribe is disabled while a recording runs. Starting a recording while a job runs asks whether to cancel the job; the recording always wins.
+
+## 7. Processing pipeline
+
+Core runs these stages in order. Every threshold lives in one options class so it can be tuned later. Call-mode recordings take the two-track path in section 9.
+
+1. **Decode.** Open the file with Media Foundation, downmix to mono, resample to 16 kHz, convert to float32 in −1 to 1. Holding the whole recording in memory is fine (about 230 MB an hour). Record the duration. An unsupported or corrupt file gets a clear error that names the file type.
+2. **Find speech.** Silero VAD over the whole track gives the speech regions. Drop regions shorter than about 0.3 s; very short clips make the recognizer invent text.
+3. **Build chunks.** Pack consecutive speech regions into chunks of at most about 25 s, splitting at the gaps between them. A single region longer than 25 s is split at its quietest point (energy minimum). Pad each chunk by about 0.15 s on each side, clamped to the recording's bounds.
+4. **Find who spoke when** (speaker labels on). Run sherpa-onnx `OfflineSpeakerDiarization` on the whole track: pyannote segmentation 3.0, the speaker-embedding model, fast clustering. If a speaker count was chosen, set the cluster count to it; on Auto, use the clustering threshold (sherpa-onnx's default, adjustable under Advanced). Wire its progress callback to the progress bar. Output: a list of (start, end, speaker).
+5. **Transcribe.** Create one `OfflineRecognizer` for the chosen model and reuse it for every chunk, each chunk as its own stream. Keep the text and the token timestamps, and group tokens into words with absolute start and end times. Progress = chunks done out of total. Thread count comes from a setting; its default is set by the Milestone 2 benchmark. If decoding several streams in one batch is faster, adopt it; otherwise don't.
+6. **Assign speakers to words.** Each word takes the diarization speaker that overlaps it most. A word that falls in a gap between speaker segments takes the nearest segment within about 1 s, otherwise the previous word's speaker. A run of words shorter than about 0.5 s, inside another speaker's run with no pause on either side, is given to that speaker. With speaker labels off, every word gets one speaker.
+7. **Assemble turns.** Consecutive words from the same speaker form one turn. With speaker labels off, start a new paragraph at pauses longer than about 2 s. Renumber speakers in order of first appearance, so the first voice heard is Speaker 1. Trim whitespace and drop empty turns.
+8. **Format and save** (section 11). Auto-save the moment the job finishes.
+
+**Fallback if token timestamps aren't available** through the C# API (checked in Milestone 1): transcribe the diarization segments themselves instead. Sort them, merge same-speaker segments less than about 1 s apart, drop segments under 0.3 s, split any over 25 s at the quietest point, pad by 0.15 s, transcribe each, and go straight to step 7.
+
+## 8. Models
+
+All models come from the sherpa-onnx GitHub releases. They are never compiled into the binary, never committed, and never downloaded by the app. Check each file name and URL against the [sherpa-onnx docs](https://k2-fsa.github.io/sherpa/onnx/) before hard-coding it.
+
+| Role | Model | sherpa-onnx release | Licence |
+| --- | --- | --- | --- |
+| Transcription, **Fast** profile (English, default) | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` | `asr-models` | CC-BY-4.0 |
+| Transcription, **Multilingual** profile (25 European languages, detected automatically) | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` | `asr-models` | CC-BY-4.0 |
+| Voice activity detection | `silero_vad.onnx` | `asr-models` | MIT |
+| Speaker segmentation | `sherpa-onnx-pyannote-segmentation-3-0` (`model.int8.onnx`) | `speaker-segmentation-models` | MIT |
+| Speaker embeddings | `nemo_en_titanet_small.onnx` | `speaker-recongition-models` (the misspelling is real; copy it exactly) | CC-BY-4.0 (verify) |
+
+The 50-minute test used a fixed speaker count (`--clustering.num-clusters=3`) and 6 threads each for segmentation and embeddings. Auto-detect, which relies on the clustering threshold instead, hasn't been tried yet; Milestone 3 runs it on the same recording and tunes the default threshold if needed.
+
+Configure Parakeet as a NeMo transducer, or let sherpa-onnx detect the type from the model's metadata. A generic "transducer" setting can fail on a vocabulary-size metadata lookup.
+
+**Where models live.** The app looks in `models\` next to the exe, then in `%LOCALAPPDATA%\Talktrace\models\`. The `TALKTRACE_MODELS_DIR` environment variable overrides both, for development and tests.
+
+**`scripts/get-models.ps1`** downloads and extracts the models (Windows' built-in `tar` handles .tar.bz2). It checks SHA-256 hashes recorded in the script, taken from GitHub's release-asset digests where shown and otherwise recorded on first download. It skips files already present, is safe to re-run, and takes `-Profile Fast|Multilingual|All` and `-Destination` (default `%LOCALAPPDATA%\Talktrace\models`).
+
+**Startup check.** The app checks that the selected profile's models are present. If any are missing, it names them and shows the command to run, with an Open models folder button. Profiles whose models are missing are disabled in the Model dropdown.
+
+## 9. Recording a meeting
+
+Talktrace can record a meeting and transcribe the recording when it stops. Windows shares the microphone between apps, so recording never blocks Teams, Zoom or anything else using the mic. Transcription is after the fact, not live.
+
+**Recording modes**
+
+| Mode | Captures | Transcribed as |
+| --- | --- | --- |
+| In person | Microphone only | One track; speakers found by diarization as usual |
+| Online call, headphones | Microphone and system audio, as two tracks | Microphone track = me, labelled with my name; diarization runs on the system-audio track only |
+| Online call, speakers | Microphone and system audio, as two tracks | As headphones, plus removal of the other participants' voices that the microphone picks up from the speaker (echo) |
+
+My name comes from a **Your name** setting, default "Me".
+
+**Supported setups**
+
+All three setups are in use and must work.
+
+| Setup | What the microphone hears | Mode |
+| --- | --- | --- |
+| Bluetooth headphones with a built-in mic (travelling) | Only me | Online call, headphones |
+| Combined speakerphone (home office) | Me, plus a little of the others. The speakerphone cancels most echo in its own hardware, before Windows sees the audio, so Talktrace gets the same cleaned signal Teams does. | Online call, speakers |
+| The laptop's own speakers and mic | Me, plus the others at full strength. Teams' echo cancellation only cleans Teams' own copy of the microphone, not Talktrace's. How much gets through depends on the laptop's own mic processing; testing will show. | Online call, speakers |
+
+What this means for the build:
+
+- **Devices follow Windows.** Teams is set to "Same as system" and Talktrace defaults to the Windows default devices, so plugging in the headphones or the speakerphone moves both apps together. A default-device change mid-meeting is handled (see Capture).
+- **The mode is remembered per device.** Talktrace remembers the mode last used with each playback device and preselects it, so the speakerphone comes up as Online call, speakers and the headphones as Online call, headphones. For a device it hasn't seen before, it guesses from the device type Windows reports: headset or headphones → headphones mode, anything else → speakers mode. The selected mode is always shown before Start and can be changed.
+- **One device, both directions.** A headset or speakerphone is both the microphone and the playback device. The silence keep-alive plays to it; silence is inaudible. Because one device clock usually drives both directions, drift is tiny in these setups; the aligned writer matters most when the microphone and playback are different devices.
+- **Bluetooth headphones.** They switch to hands-free mode as soon as any app opens their mic (Teams, or Talktrace's level meter), and both directions drop to phone quality. Windows may also present that as a different device mid-call, which the device-change handling covers. Recording still works, but accuracy falls, most of all on narrowband (8 kHz) links. Talktrace warns when the microphone runs below 16 kHz. Bluetooth also delays the microphone track by a few tenths of a second relative to system audio; that only nudges my turns slightly later and doesn't change their order.
+- **Laptop speakers and mic.** The hardest case for echo removal, because the others reach the microphone at full strength. The echo check in section 15 covers it.
+
+**Capture**
+
+- **Microphone:** NAudio `WasapiCapture`, shared mode only, never exclusive. Defaults to the Windows default communications microphone; selectable.
+- **System audio:** NAudio `WasapiLoopbackCapture` on the default playback device; selectable. Teams' speaker is set to "Same as system", so that's the device Teams plays to. It captures everything that plays, including notification sounds; the recording screen says so.
+- **Silence keep-alive:** while capturing, `WasapiOut` plays silence in shared mode on the same playback device. Windows delivers no loopback data while nothing plays; this keeps it flowing. Silence is inaudible.
+- **Format on the way in:** each source is converted to 16 kHz mono as it arrives.
+- **Aligned writer:** a writer thread runs on the microphone's clock. Every ~100 ms it takes the microphone samples that have arrived and the same number of system-audio samples. It keeps the system-audio buffer near a target level by dropping or repeating a single sample now and then. If the buffer runs dry, it writes zeros. This keeps the tracks within about 0.25 s of each other over 90 minutes.
+- **Pause:** capture keeps running but nothing is written; on Resume the writer's buffers are reset.
+- **Device changes:** if a device is unplugged or the default device changes mid-meeting, keep recording, switch to the new default device, reset the writer's buffers and show a warning. Never stop silently.
+- **Sleep:** stop the PC from sleeping while recording (`SetThreadExecutionState`) and keep recording when the window is minimised. Closing a laptop lid can still sleep the PC, depending on power settings; the README says so.
+
+**Recording screen** (the Record a meeting tab)
+
+1. Mode selector with the three modes above.
+2. Microphone and playback device dropdowns, each with a live level meter, so both can be checked before the meeting starts.
+3. Start, Pause/Resume and Stop buttons, elapsed time, and a clear recording indicator in the window and on the taskbar icon.
+4. Two standing notes under Start: "Let participants know you're recording" and "Muting in Teams doesn't pause Talktrace; use Pause."
+5. Free disk space, with a warning below about 1 GB.
+6. On Stop: save the file, then open it in the transcribe flow with options preset from the mode. A **Transcribe automatically when I stop** setting, on by default, starts the job straight away.
+7. Closing the window while recording asks for confirmation, then stops and saves cleanly.
+
+**Files**
+
+- Saved to `Documents\Talktrace\Recordings\` by default (changeable), named by date and time, for example `Recording 2026-10-29 1405.wav`.
+- One WAV per recording at 16 kHz, 16-bit: mono for In person (about 115 MB an hour), stereo for the call modes (about 230 MB an hour), left channel the microphone, right channel system audio.
+- A sidecar, `<recording>.talktrace.json`, records the mode, which channel is which, the start time, the device names and a status (`recording` or `complete`). The pipeline reads it to choose the two-track path. A stereo file without a sidecar is treated as an ordinary recording.
+- **Crash safety:** write to disk continuously and refresh the WAV header every few seconds, so a crash or power loss leaves a playable file. On the next launch, a sidecar still marked `recording` means an unfinished recording: offer to recover it (fix the header from the file size) and transcribe it.
+- A **Keep recordings after transcribing** setting, on by default. When off, the WAV and sidecar go to the Recycle Bin once the transcript is saved.
+
+**How recordings are transcribed**
+
+- **In person:** the normal pipeline on the mono file.
+- **Headphones:** the microphone track goes through VAD, chunking and transcription, and every word is labelled with my name. The system-audio track goes through the full pipeline, diarization included. Words from both tracks are merged in time order, then assembled into turns.
+- **Speakers:** as headphones, then remove echo: a microphone phrase (words between pauses) is dropped when most of its words (about 60%, tunable) also appear in the system-audio transcript within about 1.5 s (tunable). My own speech while others are talking is kept, because its words don't match theirs. With a speakerphone there is little echo left to remove; with plain speakers there is a lot. The README recommends headphones or a speakerphone over plain speakers.
+- For call recordings, the Speakers option counts the other participants only and also offers 1, which skips diarization.
+- In the speakers panel, I appear already named; the others appear as Speaker 1, Speaker 2 and so on.
+
+## 10. User interface
+
+One resizable window, about 900 × 700 to start, with two tabs: **Transcribe a file** and **Record a meeting** (section 9). The file tab, top to bottom:
+
+1. **File.** A drop zone ("Drop a recording here") and a Choose recording… button with a file dialog filtered to supported types. Once chosen, show the file's name, duration and size.
+2. **Options**, in one row:
+   - **Speakers:** Don't label speakers · Auto-detect · 2 · 3 · 4 · 5 · 6 · 7 · 8. Default Auto-detect. For call recordings: Don't label speakers · Auto-detect · 1–8 (other participants).
+   - **Model:** Fast (English) · Multilingual. Default Fast.
+   - **Include timestamps:** checkbox, off by default.
+   - **Advanced** (collapsed): clustering threshold, thread count, segment and chunk limits.
+3. **Transcribe** button, the primary action. It becomes **Cancel** while a job runs.
+4. **Progress.** A stage label (Reading audio · Identifying speakers · Transcribing 42 of 310 · Saving), a progress bar, elapsed time, and estimated time left once transcription starts.
+5. **Transcript.** A scrollable, editable text box showing the result.
+6. **Speakers panel**, beside or below the transcript. One row per speaker: the label, an editable name box, and the first full sentence that speaker said. A play-a-sample button if it's cheap with NAudio. Renaming updates the transcript immediately.
+7. **Actions:** Save as… (default `<recording name> - transcript.txt` in the recording's folder), Copy all, Open folder.
+
+**Behaviour**
+
+- Auto-save to the default path as soon as a job finishes. Never overwrite an existing file; add " (2)" instead. Later renames and edits are saved with Save, which overwrites that auto-saved file.
+- Remember the last options, the recording mode for each playback device, and the window size in `%LOCALAPPDATA%\Talktrace\settings.json`.
+- The window stays responsive throughout. Cancel takes effect within about 2 s at any stage. Closing the window mid-job asks for confirmation, then cancels.
+- Errors appear inline in plain language, with a Copy details link; the full details go to the log.
+- One file at a time; no queue.
+- Shortcuts: Ctrl+O choose recording, Ctrl+S save, Esc cancel a running job.
+
+## 11. Output format
+
+Plain UTF-8 text: a short header, then one paragraph per speaker turn with a blank line between turns. No hard line wrapping.
+
+```
+Transcript: Q3 planning session.m4a
+Transcribed: 2026-10-29 · Duration: 52:14 · Model: Fast (English)
+Speakers: Dana, Raj, Speaker 3
+
+Dana: Okay, let's get started. I want to cover the ERP timeline first and then budget.
+
+Raj: Sounds good. I've got the updated vendor numbers.
+
+Dana: Great, go ahead.
+```
+
+- **Speakers line:** every speaker in order of first appearance, by current name; unrenamed speakers show as Speaker N. Omitted when speaker labels are off.
+- **With timestamps:** each turn starts with its start time: `[00:03:12] Speaker 1: …`. For recordings, times are from the start of the recording.
+- **Renamed speakers:** the chosen names replace the labels everywhere.
+- **Speaker labels off:** no labels; paragraphs split at pauses longer than about 2 s.
+
+The CLI writes the same format:
+
+```
+Talktrace.Cli.exe <file> [--speakers auto|none|1..8] [--model fast|multilingual]
+                         [--timestamps] [--out <path>] [--threads <n>]
+```
+
+When it finishes, the CLI prints per-stage timings and the real-time factor.
+
+## 12. Performance, cancellation and logging
+
+- **Threading.** All heavy work happens in the worker. The app's UI thread only handles worker messages and user input.
+- **Cancellation.** Within about 2 s at any stage (section 6).
+- **Native resources.** Dispose recognizers, diarizers and streams deterministically in the worker; the process exiting after each job frees anything left.
+- **Speed target.** Fast profile, 60-minute 3-speaker recording, under 20 minutes on this machine. Baseline from the 50-minute test: about 2 minutes transcription and about 6 minutes speaker identification. Measure in Milestones 2 and 3; if far off, profile and report where the time goes before optimising.
+- **Threads.** Benchmark 4, 6, 8 and 11 threads in Milestone 2 and make the fastest the default. (The 50-minute test used 6.)
+- **Memory target.** Under about 2.5 GB peak in the worker for a 90-minute recording on the Fast profile. Report the actual figure.
+- **Logging.** `%LOCALAPPDATA%\Talktrace\logs\`, one file per day, kept for 14 days, shared by the app and the worker (each line tagged with its process). Log app version, model profile, thread count, audio duration, file name and type, wall time per stage, real-time factor, and errors with stack traces. **Never** log transcript text or audio.
+
+## 13. Build and packaging
+
+- **Publish** with `dotnet publish src/Talktrace.App -c Release -r win-arm64 --self-contained true`, and publish the CLI into the same output folder so both share the native DLLs and the app can launch the worker. A plain folder; use single-file only if the native libraries load reliably that way.
+- **Verify the architecture.** `scripts/verify-arm64.ps1` reads the PE header of every native binary in the output (the .exe files, `onnxruntime.dll`, the sherpa-onnx DLLs and any others) and fails unless each is ARM64 (machine type 0xAA64). It skips managed IL-only assemblies, detected by their CLR header (they report an i386 machine type). Run it after every publish.
+- **Package.** `scripts/package.ps1` produces `Talktrace-<version>-win-arm64.zip` with the publish folder, README and THIRD-PARTY-NOTICES, and no models.
+- **Shortcut.** `scripts/install-shortcut.ps1` adds a Start menu shortcut for the current user. No admin rights.
+- **Signing.** Unsigned. The README explains the SmartScreen prompt on first launch (More info → Run anyway).
+- **Prerequisites** in the README: the ARM64 .NET 10 SDK and Git. Visual Studio is optional.
+- **Where it's built.** On the ARM64 machine itself, so everything is built and tested natively. If ever built elsewhere (Linux or cloud, with `EnableWindowsTargeting=true`), say so clearly and give exact test steps rather than reporting it as working.
+
+## 14. Milestones
+
+Work through these in order. Stop at the end of each one and show the results before moving on.
+
+1. **Scaffold and smoke test.** Repo layout, `CLAUDE.md`, `.gitignore`, and `get-models.ps1` for the Fast profile, VAD and diarization models. The CLI transcribes a sherpa-onnx sample WAV with Parakeet, and token timestamps come through the C# API. Run `verify-arm64.ps1`.
+   - Show: the build output, the ARM64 check, and the sample transcript with word times.
+2. **Transcription without speakers.** Media Foundation decoding for WAV, MP3, M4A and MP4; VAD; chunking; ASR with word times; output with speaker labels off; thread benchmark. CLI only.
+   - Show: a benchmark on the test recording, with per-stage times, the real-time factor and the thread results.
+3. **Speaker labels.** Diarization, speaker assignment to words, turn assembly, speaker renumbering, and unit tests for that logic. CLI only.
+   - Show: the labelled transcript of the test recording, with timings.
+4. **The app.** The WPF window wired to the worker: choose or drop a file, options, progress, cancel, transcript view, save and copy.
+   - Show: the running app, tried on a real recording.
+5. **Polish.** The speakers panel with rename, settings persistence, auto-save, plain-language errors, logging, and the Multilingual profile.
+6. **Package.** Publish, ARM64 verification, the zip, README, THIRD-PARTY-NOTICES and the shortcut script.
+7. **Record a meeting.** The Record a meeting tab, microphone and system-audio capture, silence keep-alive, the aligned writer, the three modes, crash-safe files and recovery, the two-track transcription path and echo removal. Then repeat the Milestone 6 packaging steps.
+   - Show: a recorded Teams test call with my voice labelled by name, and the 90-minute alignment check.
+
+**Ask first before:**
+
+- adding any dependency this document doesn't name
+- writing any code that touches the network outside `get-models.ps1`
+- doing anything that needs admin rights
+- changing the stack or the repository layout
+
+## 15. Testing and acceptance
+
+**Testing**
+
+- **Unit tests, no models needed:** chunk building (packing, splitting, padding), assigning speakers to words and smoothing, speaker renumbering, turn assembly, paragraphs with labels off, echo removal, formatting with and without timestamps, renaming and the Speakers line, the aligned writer (with simulated device clocks), and WAV header recovery.
+- **Integration tests** run only when `TALKTRACE_MODELS_DIR` points at the models (using the sherpa-onnx sample WAVs), plus local recordings when `TALKTRACE_TESTDATA` points at `testdata\`; otherwise they skip.
+- **Audio inputs:** WAV, MP3, M4A, a Teams or Zoom MP4 export, WMA, a stereo file, 44.1 and 48 kHz files, a corrupt file and a zero-length file.
+- **Long input:** one recording over 90 minutes, checking memory and time.
+- **Test recordings:** provided on request and kept in the gitignored `testdata\` folder. Nothing from it is ever committed.
+- **Offline check:** run a full job with networking turned off.
+- **Recording:** a Teams call while Teams has the mic open, once on the speakerphone, once on the Bluetooth headphones and once on the laptop's own speakers and mic; connecting the headphones mid-call; an in-person meeting; pause and resume; unplugging a device mid-call; long silences on the playback device; killing the app mid-recording, then recovering.
+- **Echo check:** on the speakerphone and on the laptop's speakers and mic, the other participants' words must not also appear under my name.
+- **Alignment check:** record for 90 minutes with the laptop's built-in microphone and the speakerphone as the playback device, while a short beep plays every minute. The right channel gets each beep directly and the left channel through the room, so the gap between them should stay the same; it must not change by more than 0.25 s from start to end. (Using the speakerphone's own microphone wouldn't work: its echo cancellation removes the beep. Two separate devices are also the worst case for drift.)
+
+**Done when**
+
+- [ ] `verify-arm64.ps1` passes: every shipped native binary is ARM64.
+- [ ] A full transcription completes with the network disconnected.
+- [ ] In the app, I can choose a recording, click Transcribe and get a saved .txt with speaker labels.
+- [ ] WAV, MP3, M4A and Teams/Zoom MP4 files all work.
+- [ ] The window stays responsive, and Cancel stops a run within a few seconds at any stage.
+- [ ] Renaming a speaker updates the on-screen transcript, the Speakers line and the saved file.
+- [ ] The Fast profile meets the speed target, or the reason it can't is explained.
+- [ ] The README covers setup, model download, usage, settings and known limits.
+- [ ] The logs contain no transcript text.
+- [ ] I can record a Teams call while Teams is using the microphone, and both my voice and the other participants are captured, on the speakerphone, the Bluetooth headphones and the laptop's own speakers and mic.
+- [ ] Talktrace preselects the right call mode for each of those setups.
+- [ ] In the call modes, my speech is labelled with my name and everyone else gets speaker numbers.
+- [ ] On the speakerphone and the laptop's speakers, the other participants' words don't also appear under my name.
+- [ ] Killing the app mid-recording leaves a playable file that Talktrace offers to recover.
+- [ ] The two tracks stay within about 0.25 s of each other over a 90-minute recording.
+
+## 16. Known pitfalls
+
+- **Speaker errors.** Diarization sometimes splits one person into two speakers, merges two similar voices, or pins a short interjection on the wrong person. The speaker-count option and the clustering threshold are the fixes; the README explains both.
+- **Diarization can't be cancelled in-process.** sherpa-onnx ignores the progress callback's return value. This is why jobs run in a worker.
+- **Parakeet model type.** Configure it as a NeMo transducer, or let sherpa-onnx detect the type from the metadata.
+- **The release name `speaker-recongition-models`** is misspelled in sherpa-onnx's own URLs. Copy it exactly.
+- **Wrong native package.** An ARM64 process can't load x64 DLLs: a win-x64 runtime package builds but fails at load time with a DLL or bad-image error. Always use the win-arm64 runtime package.
+- **Windows "N" editions** ship without Media Foundation. Detect this and point to the Media Feature Pack.
+- **Unsupported codecs.** Some formats, such as Opus or WebM, may not decode depending on installed codecs. Show a clear message rather than failing silently.
+- **Loopback silence.** WASAPI loopback delivers no data while nothing plays; the silence keep-alive handles it.
+- **Two clocks.** The microphone and playback devices run on separate clocks and drift apart; the aligned writer handles it.
+- **Bluetooth headphones** drop into a low-quality hands-free mode when any app opens their mic, and may appear to Windows as a different device at that moment. Talktrace follows the device change and warns about low microphone quality. The README explains the trade-off and that wired or USB headphones give better transcripts.
+- **Speakerphone echo cancellation** removes anything played through the speakerphone from its own microphone. That's what makes it work well for calls, but it also means a test sound played through it won't reach its microphone.
+- **Exclusive mode.** If another app has taken exclusive control of the microphone, capture fails. Show a clear message pointing to the Windows sound setting.
+- **Microphone permission.** Windows privacy settings must allow desktop apps to use the microphone. Detect access-denied and say how to fix it.
+- **Laptop lid.** Closing the lid can sleep the PC despite `SetThreadExecutionState`, depending on power settings.
+
+## 17. Out of scope for v1
+
+Real-time (live) transcription, NPU or GPU acceleration, Whisper or any other ASR engine, summaries or any LLM features, a batch queue, an installer or MSIX package, code signing, auto-update, translation, capturing just one app's audio (such as only Teams) instead of all system audio, and any cloud service.
+
+## 18. Future: Microsoft Store release
+
+Not built until asked. Recorded here so v1 choices don't block it:
+
+- No hard-coded install paths. Models load from next to the app or from app data; settings and logs live in app-data folders, which still work when packaged.
+- An MSIX bundle with ARM64 and x64 builds, the Fast profile models inside the package, and the `runFullTrust` and microphone capabilities. Confirm that microphone and system-audio capture both work when packaged.
+- An About screen listing every model and library with its licence and attribution (Parakeet is CC-BY-4.0). Re-confirm that each licence allows commercial use.
+
+## 19. Open items
+
+None.

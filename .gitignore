@@ -1,0 +1,40 @@
+# This repo is public. Recordings, transcripts, test data and models must never be committed.
+
+# Build output
+bin/
+obj/
+artifacts/
+TestResults/
+
+# IDE and user files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Models (downloaded by scripts/get-models.ps1)
+models/
+
+# Local test recordings
+testdata/
+
+# Audio and video
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.wma
+*.aac
+*.flac
+*.ogg
+*.opus
+*.webm
+
+# Recording sidecars, transcripts and logs
+*.talktrace.json
+*transcript*.txt
+*.log
+
+# Original build brief (replaced by DESIGN.md)
+Talktrace — Claude Code Build Brief.md
