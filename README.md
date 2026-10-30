@@ -14,13 +14,21 @@ dotnet build -c Release
 dotnet test -c Release
 ```
 
-To transcribe a recording from the command line (speaker labels aren't available yet):
+To run the app after building:
 
 ```powershell
-.\src\Talktrace.Cli\bin\Release\net10.0-windows\win-arm64\Talktrace.Cli.exe "C:\path\to\meeting.m4a" --timestamps
+.\src\Talktrace.App\bin\Release\net10.0-windows\win-arm64\Talktrace.exe
 ```
 
-The transcript is saved next to the recording as `<name> - transcript.txt`, and the CLI prints how long each stage took.
+Drop a recording on the window or choose one, pick the options, and click Transcribe. Speaker identification takes most of the time: about 6 minutes for a 50-minute meeting on a Snapdragon X Elite. The transcript is saved next to the recording as `<name> - transcript.txt` as soon as it's done, and shown in the window, where you can edit it and save again.
+
+The same transcription from the command line:
+
+```powershell
+.\src\Talktrace.Cli\bin\Release\net10.0-windows\win-arm64\Talktrace.Cli.exe "C:\path\to\meeting.m4a" --speakers auto --timestamps
+```
+
+The CLI prints how long each stage took.
 
 ## Licence
 

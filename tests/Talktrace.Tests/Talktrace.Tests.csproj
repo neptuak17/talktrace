@@ -14,5 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Talktrace.Core\Talktrace.Core.csproj" />
+    <!-- Puts Talktrace.Cli.exe next to the tests, for the worker tests. -->
+    <ProjectReference Include="..\..\src\Talktrace.Cli\Talktrace.Cli.csproj" />
   </ItemGroup>
 </Project>

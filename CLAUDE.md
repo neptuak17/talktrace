@@ -4,7 +4,7 @@ A native Windows on ARM64 desktop app that turns meeting recordings into speaker
 
 **[DESIGN.md](DESIGN.md) is the source of truth.** Read it before changing anything, and update it when a decision changes. Work milestone by milestone (DESIGN.md section 14) and stop at the end of each one for review.
 
-Progress: Milestones 1 (scaffold), 2 (transcription without speakers) and 3 (speaker labels) done and reviewed. Next: Milestone 4 (the app).
+Progress: Milestones 1 (scaffold), 2 (transcription without speakers) and 3 (speaker labels) done and reviewed. Milestone 4 (the app) built and awaiting the user's review. Next: Milestone 5 (polish).
 
 ## Working agreement
 
@@ -18,7 +18,7 @@ Progress: Milestones 1 (scaffold), 2 (transcription without speakers) and 3 (spe
 
 - `testdata\test_recording.m4a` is the user's real meeting: 49:09, AAC at 48 kHz stereo, five speakers (the user and four others, confirmed by the user; the earlier sherpa-onnx test's count of 3 was a guess). It's confidential and local only.
 - Check output only by counts (paragraphs, words, speakers, timestamps). Never read, quote, print or log transcript text; the user judges accuracy.
-- Baselines: Milestone 2 (labels off) took 110 s in total (real-time factor 0.037) with a 1.86 GB peak. Milestone 3 (labels on, Auto) took 360 s (0.122) with a 1.88 GB peak and found 4 speakers; the 98-minute joined file (`testdata\test_recording x2.wav`) took 722 s with a 2.59 GB peak.
+- Baselines: Milestone 2 (labels off) took 110 s in total (real-time factor 0.037) with a 1.86 GB peak. Milestone 3 (labels on, Auto) took 360 s (0.122) with a 1.88 GB peak and found 4 speakers; the 98-minute joined file (`testdata\test_recording x2.wav`) took 722 s with a 2.59 GB peak. Milestone 4's app (Auto) took 355 s with a 1.88 GB worker peak, and its transcript matched the CLI's.
 - Run timing jobs (full transcriptions, `--benchmark`) with nothing else running and the laptop on mains power; a concurrent build or test run skewed timings up to 3×, and battery power about 2×.
 - Speaker identification takes 4–9 minutes per run. To compare speaker settings, save the diarization segments and word times once (numbers only, outside the repo) and re-run the merge and assignment on them, rather than re-running the whole job.
 
@@ -27,6 +27,13 @@ Progress: Milestones 1 (scaffold), 2 (transcription without speakers) and 3 (spe
 - Speakers are found in two stages (DESIGN.md section 7, step 4): `SpeakerDiarizer.Diarize` runs sherpa-onnx set to over-split, and `SpeakerMerger` merges the groups by voice using TitaNet voice prints. A chosen count is applied by the merge, never by sherpa-onnx's own cluster count.
 - Speaker segmentation uses pyannote's full-precision `model.onnx`; the int8 model missed a third of the speech.
 - With labels on, turns stay whole however long (the user's decision; DESIGN.md section 3).
+
+## The app (Milestone 4)
+
+- The app runs every job through Core's `WorkerClient`, which starts `Talktrace.Cli.exe --worker` from the app's own folder. The app's project reference to the CLI puts the exe there in builds; the tests reference it the same way for the worker tests.
+- WPF with `ThemeMode="System"` (the Fluent theme, still experimental: WPF0001 is suppressed in the app's project). WPF projects' implicit usings leave out `System.IO`.
+- `ProgressBar.Value` (any `RangeBase`) binds two-way by default; bind it to a read-only view-model property with `Mode=OneWay`, or the window crashes on load.
+- To check the app on a real recording without reading the transcript, drive it with UI Automation from PowerShell and read only TextBlocks (stage, status, errors); the transcript is a TextBox. Never screenshot the window while a real recording's transcript is on screen. The Open dialog's controls show as panes to UI Automation: set the file name with `WM_SETTEXT` on the last control with id 1148, then `BM_CLICK` the Open button (id 1).
 
 ## Hard constraints
 

@@ -85,6 +85,25 @@ public sealed class AudioDecoderTests : IDisposable
         Assert.Contains("empty", error.Message);
     }
 
+    [Fact]
+    public void Reads_the_duration_without_decoding()
+    {
+        string wav = WriteTone("tone.wav", 48000, 2, seconds: 2.5);
+
+        Assert.Equal(2.5, AudioDecoder.ReadDuration(wav).TotalSeconds, tolerance: 0.01);
+    }
+
+    [Fact]
+    public void Reading_the_duration_of_a_damaged_file_reports_its_type()
+    {
+        string path = Path.Combine(_folder, "broken.m4a");
+        File.WriteAllBytes(path, new byte[20000]);
+
+        var error = Assert.Throws<TalktraceException>(() => AudioDecoder.ReadDuration(path));
+
+        Assert.Contains("M4A file", error.Message);
+    }
+
     private string WriteTone(string name, int sampleRate, int channels, double seconds)
     {
         string path = Path.Combine(_folder, name);

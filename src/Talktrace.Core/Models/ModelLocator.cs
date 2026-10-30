@@ -22,6 +22,12 @@ public static class ModelLocator
         ];
     }
 
+    /// <summary>
+    /// Where models are installed for this user: <c>%LOCALAPPDATA%\Talktrace\models\</c>, which get-models.ps1 fills,
+    /// or TALKTRACE_MODELS_DIR when it is set.
+    /// </summary>
+    public static string UserFolder => SearchRoots()[^1];
+
     /// <summary>Returns the full path of <paramref name="relativePath"/> under the first root that has it, or null.</summary>
     public static string? Find(string relativePath)
     {

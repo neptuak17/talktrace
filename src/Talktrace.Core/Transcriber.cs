@@ -20,8 +20,7 @@ public static class Transcriber
     private static TranscriptResult Transcribe(
         string path, TranscribeOptions options, IProgress<TranscribeProgress>? progress, CancellationToken cancellationToken)
     {
-        // With one speaker there is nobody to tell apart, so every word goes to Speaker 1.
-        bool identifySpeakers = options.Speakers.Label && options.Speakers.Count != 1;
+        bool identifySpeakers = IdentifiesSpeakers(options);
 
         string asrDirectory = RequireModel(options.Profile.AsrDirectory, options.Profile);
         string vadModel = RequireModel(VadModelFile, options.Profile);
@@ -105,6 +104,7 @@ public static class Transcriber
         CancellationToken cancellationToken)
     {
         var words = new List<Word>();
+        cancellationToken.ThrowIfCancellationRequested(); // before the model takes a few seconds to load
         using var recognizer = new ParakeetRecognizer(asrDirectory, options.NumThreads);
 
         for (int i = 0; i < chunks.Count; i++)
@@ -135,6 +135,18 @@ public static class Transcriber
         int end = Math.Min(audio.Samples.Length, (int)Math.Round(range.End * audio.SampleRate));
         return new AudioSlice(audio.Samples[start..end], (double)start / audio.SampleRate);
     }
+
+    /// <summary>The model files a job with these options needs that aren't installed, as paths relative to the models folder.</summary>
+    public static IReadOnlyList<string> MissingModels(TranscribeOptions options)
+    {
+        string[] needed = IdentifiesSpeakers(options)
+            ? [options.Profile.AsrDirectory, VadModelFile, SpeakerDiarizer.SegmentationModelFile, SpeakerDiarizer.EmbeddingModelFile]
+            : [options.Profile.AsrDirectory, VadModelFile];
+        return needed.Where(file => ModelLocator.Find(file) is null).ToList();
+    }
+
+    // With one speaker there is nobody to tell apart, so every word goes to Speaker 1.
+    private static bool IdentifiesSpeakers(TranscribeOptions options) => options.Speakers.Label && options.Speakers.Count != 1;
 
     private static string RequireModel(string relativePath, ModelProfile profile) =>
         ModelLocator.Find(relativePath)

@@ -58,6 +58,7 @@ internal static class SpeakerDiarizer
         config.MinDurationOn = (float)options.MinSpeakerSegmentSeconds;
         config.MinDurationOff = (float)options.SpeakerSegmentMergeSeconds;
 
+        cancellationToken.ThrowIfCancellationRequested();
         using var diarizer = new OfflineSpeakerDiarization(config);
         if (NativeHandle.IsNull(diarizer))
             throw new TalktraceException(

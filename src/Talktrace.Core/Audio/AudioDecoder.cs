@@ -12,17 +12,9 @@ public static class AudioDecoder
 {
     public const int SampleRate = 16000;
 
-    public static AudioClip Decode(string path, CancellationToken cancellationToken = default)
-    {
-        var file = new FileInfo(path);
-        if (!file.Exists)
-            throw new TalktraceException($"The file doesn't exist: {path}");
-        if (file.Length == 0)
-            throw new TalktraceException($"The file is empty: {file.Name}");
-
-        try
+    public static AudioClip Decode(string path, CancellationToken cancellationToken = default) =>
+        Read(path, (file, reader) =>
         {
-            using var reader = new MediaFoundationReader(path);
             using var resampler = new MediaFoundationResampler(reader, WaveFormat.CreateIeeeFloatWaveFormat(SampleRate, 1))
             {
                 ResamplerQuality = 60,
@@ -41,6 +33,23 @@ public static class AudioDecoder
                 throw new TalktraceException($"{file.Name} contains no audio.");
 
             return new AudioClip(samples.ToArray(), SampleRate);
+        });
+
+    /// <summary>The recording's length from its header, without decoding it. Fails as <see cref="Decode"/> would on a file it can't read.</summary>
+    public static TimeSpan ReadDuration(string path) => Read(path, (_, reader) => reader.TotalTime);
+
+    private static T Read<T>(string path, Func<FileInfo, MediaFoundationReader, T> read)
+    {
+        var file = new FileInfo(path);
+        if (!file.Exists)
+            throw new TalktraceException($"The file doesn't exist: {path}");
+        if (file.Length == 0)
+            throw new TalktraceException($"The file is empty: {file.Name}");
+
+        try
+        {
+            using var reader = new MediaFoundationReader(path);
+            return read(file, reader);
         }
         catch (Exception e) when (e is DllNotFoundException || e.InnerException is DllNotFoundException)
         {

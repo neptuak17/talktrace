@@ -4,10 +4,18 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>Talktrace</AssemblyName>
     <RootNamespace>Talktrace.App</RootNamespace>
+    <!-- ThemeMode, which follows the Windows light or dark setting with the Fluent theme, is still marked experimental. -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Talktrace.Core\Talktrace.Core.csproj" />
     <ProjectReference Include="..\Talktrace.Recording\Talktrace.Recording.csproj" />
+    <!-- Puts the worker, Talktrace.Cli.exe, next to the app in builds. Publishing puts both in one folder (DESIGN.md section 13). -->
+    <ProjectReference Include="..\Talktrace.Cli\Talktrace.Cli.csproj" />
   </ItemGroup>
 </Project>

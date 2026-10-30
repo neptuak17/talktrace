@@ -3,12 +3,23 @@ using System.Globalization;
 using Talktrace.Core;
 using Talktrace.Core.Models;
 using Talktrace.Core.Transcripts;
+using Talktrace.Core.Worker;
 
 // Talktrace command line (DESIGN.md section 11): transcribe one file and print per-stage timings.
+// With --worker, it runs one job for the app instead (DESIGN.md section 6).
 
-Console.OutputEncoding = System.Text.Encoding.UTF8;
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+
+if (args is [WorkerProtocol.WorkerArgument])
+{
+    var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    using var stdin = new StreamReader(Console.OpenStandardInput(), utf8);
+    using var stdout = new StreamWriter(Console.OpenStandardOutput(), utf8);
+    return await WorkerHost.RunAsync(stdin, stdout);
+}
+
+Console.OutputEncoding = System.Text.Encoding.UTF8;
 
 const string Usage = """
     Usage: Talktrace.Cli.exe <file> [--speakers auto|none|1..8] [--model fast|multilingual]
@@ -54,14 +65,11 @@ try
                 };
                 break;
             case "--model":
+                string model = Value();
                 options = options with
                 {
-                    Profile = Value() switch
-                    {
-                        "fast" => ModelProfile.Fast,
-                        "multilingual" => ModelProfile.Multilingual,
-                        var other => throw new ArgumentException($"Unknown model: {other}. Use fast or multilingual."),
-                    },
+                    Profile = ModelProfile.FromId(model)
+                              ?? throw new ArgumentException($"Unknown model: {model}. Use fast or multilingual."),
                 };
                 break;
             case "--timestamps":

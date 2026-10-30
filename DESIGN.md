@@ -48,7 +48,7 @@ Alongside these, one standing design rule: **nothing in v1 may compromise a poss
 | ARM64X files pass the ARM64 check. | .NET's WPF ships `vcruntime140_cor3.dll` as ARM64X. Its header says ARM64 and an ARM64 process runs its native ARM64 code, so nothing is emulated. |
 | Tests use xUnit v3 on Microsoft.Testing.Platform. | The .NET 10 SDK no longer runs xUnit v3 through the older VSTest runner; this also drops two test packages. |
 | The recognizer uses 6 threads by default and decodes one chunk at a time. | Milestone 2 benchmark, first 10 minutes of the test recording: 4, 6, 8 and 11 threads gave real-time factors of 0.030, 0.029, 0.031 and 0.033. Batching 2, 4 or 8 chunks per call was slower (0.033 to 0.036). |
-| Nothing in v1 may compromise a possible Microsoft Store release; section 18 lists the rules, and every milestone is checked against them. | Audited after Milestones 2 and 3: no conflicts. Milestone 3 writes nothing new, reads its models through the same locator, assumes no processor, and uses only models already listed with commercial-use licences. The only file writes are transcripts next to the recording. Paths come from the app folder or Windows known folders. The `win-arm64` sherpa-onnx package reference is harmless for an x64 build, because the main package already brings every platform's native files and an x64 build selects only the x64 ones. |
+| Nothing in v1 may compromise a possible Microsoft Store release; section 18 lists the rules, and every milestone is checked against them. | Audited after Milestones 2, 3 and 4: no conflicts. Milestone 4 launches the worker from the app's own folder and Explorer from the Windows folder; it writes only transcripts (next to the recording, or where Save as puts them) and, for Open models folder, creates the models folder under LocalAppData, opened from inside the app. Its one new package, CommunityToolkit.Mvvm, is MIT; it adds no network code and no capability. Earlier audits: Milestone 3 writes nothing new, reads its models through the same locator, assumes no processor, and uses only models already listed with commercial-use licences. The only file writes are transcripts next to the recording. Paths come from the app folder or Windows known folders. The `win-arm64` sherpa-onnx package reference is harmless for an x64 build, because the main package already brings every platform's native files and an x64 build selects only the x64 ones. |
 | With speaker labels off, paragraphs split at pauses only, never on length. | A 100-word cap ending paragraphs at the next sentence end was tried in Milestone 2 and cut paragraphs off mid-thought. Long paragraphs are the accepted trade-off. |
 | Speaker segmentation uses pyannote's full-precision `model.onnx`, not `model.int8.onnx`. | On the 49-minute test recording (fixed count 5), the int8 model found no speaker for 34% of the recognised words, spread evenly through the recording; full precision missed 0.3%. Adding 10 dB of gain didn't help int8, so quantization is the cause. Full precision took 258 s against about 200 s. |
 | Speaker identification uses the same thread count as the recognizer (default 6) for both segmentation and embeddings. | The user's earlier 50-minute test used 6 threads for each. One thread setting keeps Advanced simple. |
@@ -59,6 +59,15 @@ Alongside these, one standing design rule: **nothing in v1 may compromise a poss
 | With speaker labels on, each turn is one paragraph however long. The user chose this, settling open item 1. | On the test recording (Auto, four speakers): 72 turns, median 80 words; 18 turns over 200 words held 61% of the words, and the longest was 539 words. Splitting at pauses over 1 s would give 145 paragraphs (longest 303 words); over 2 s, 84 paragraphs (longest still 539). |
 | The CLI takes `--threshold` for Auto-detect's clustering threshold. | The app offers it under Advanced; the CLI mirrors the app's options, as it does for `--threads`. |
 | A diarizer or embedding extractor whose model fails to load is detected and reported as a plain error. | sherpa-onnx 2.0.1 returns a null handle, and its C# wrappers don't check it, so the first call would crash the process. Talktrace reads the wrappers' private handle field to check. |
+| The app's view model uses CommunityToolkit.Mvvm 8.4.2, pinned exactly. The user approved adding it in Milestone 4. | MIT, no dependencies; it generates the property-change and command code at build time. |
+| Until Milestone 7, the window shows only the Transcribe a file screen, with no tab strip. The user chose this. | A Record a meeting tab with nothing behind it would only be clutter. The tabs arrive with recording. |
+| Unsaved edits to the transcript prompt Save / Don't save / Cancel before another transcription starts or the window closes. The user chose this. | Edits are never lost by accident; the auto-saved file keeps the original either way. |
+| The progress bar fills once per stage. Stages that report nothing as they go (reading audio, saving, and segmentation at the start of speaker identification) show a busy bar. Time left appears once a few chunks have been transcribed, from their pace. The user chose this over one bar for the whole job. | Only transcription's pace is known well enough to estimate from; a whole-job bar would move at a guessed speed for the first several minutes. |
+| Both sides of the worker protocol live in Core (`Worker\`): `WorkerHost` reads the job and writes messages, and `WorkerClient` launches the worker and reads them. `Talktrace.Cli --worker` only connects `WorkerHost` to stdin and stdout. | The protocol is tested in-process on strings and end to end against the real worker, without the WPF app. |
+| The app and the tests reference `Talktrace.Cli` as a project, so builds put `Talktrace.Cli.exe` next to them. | The app launches the worker from its own folder (section 18, rule 2), so a plain `dotnet build` of the app must put it there too. Publishing still publishes both into one folder. |
+| The worker carries on when stdin closes, and the app ignores any stdout line that isn't a protocol message, without keeping it. | A closed stdin means the app has gone; finishing the job means its transcript is still saved. Native libraries can print to stdout, and a garbled line could hold transcript text, so it is counted and dropped, never logged. |
+| Cancellation is also checked just before each model loads. | Loading the speech model takes a few seconds; checking first lets Cancel stop between stages without the 2 s kill. |
+| Choosing or dropping a file reads its length from the header first, so an unreadable file is reported then, not after Transcribe. | Media Foundation opens the file without decoding it, which takes a moment, and the same error messages as decoding apply. |
 
 ## 4. Technology
 
@@ -85,8 +94,8 @@ Directory.Packages.props        every package version, pinned
 .gitignore  .gitattributes  .editorconfig
 src/
   Talktrace.Core/               transcription pipeline: decoding, VAD, diarization, ASR, speaker
-                                assignment, turns, formatting, options, sidecar format, worker
-                                protocol. No UI and no capture code.
+                                assignment, turns, formatting, options, sidecar format, and both
+                                sides of the worker protocol. No UI and no capture code.
   Talktrace.Recording/          microphone and system-audio capture, silence keep-alive, aligned
                                 WAV writer, sidecar writing, crash recovery. References Core.
   Talktrace.App/                WPF app. References Core and Recording. Runs jobs through the worker.
@@ -115,11 +124,12 @@ Core exposes one entry point that the CLI and the worker both call:
 
 **Worker protocol**
 
-- The app starts `Talktrace.Cli.exe --worker` with no window, at below-normal priority, and sends the job (input path, options, output path) as JSON on stdin.
-- The worker writes one JSON message per line to stdout: `progress` (stage, done, total), `result` (turns with start, end, speaker and text; speakers; duration; stage timings) or `error` (a plain-language message plus details).
-- The worker writes the auto-save .txt itself before it sends `result`, so a finished job is never lost, even if the app has gone.
-- **Cancel:** the app sends `cancel` on stdin and the worker stops at the next chunk. If it hasn't exited within about 2 s (for example, during speaker identification), the app kills it. Partial results are discarded.
-- **Crash:** if the worker exits without a `result`, the app shows "Transcription stopped unexpectedly" and logs the exit code.
+- The app starts `Talktrace.Cli.exe --worker` from its own folder with no window, at below-normal priority, and sends the job (input path and every option, output path included) as JSON on stdin. Every line in either direction is one JSON object whose `type` names it; a model profile travels as its id (`fast` or `multilingual`).
+- The worker writes one JSON message per line to stdout: `progress` (stage, done, total; each stage's start and end, and at most ten a second in between), `result` (the whole transcript result: turns with start, end, speaker and text; duration; model; stage timings; where it was saved) or `error` (a plain-language message plus details). Lines that aren't messages (native libraries can print) are ignored.
+- The worker writes the auto-save .txt itself before it sends `result`, so a finished job is never lost, even if the app has gone. If stdin closes, the worker carries on to the end for the same reason.
+- **Cancel:** the app sends `cancel` on stdin and the worker stops at the next chunk, or before the next model loads. If it hasn't exited within 2 s (for example, during speaker identification), the app kills it. Partial results are discarded.
+- **Crash:** if the worker exits without a `result`, the app shows "Transcription stopped unexpectedly", with the exit code and the end of stderr under Copy details.
+- Exit codes: 0 done, 1 failed (an `error` was sent), 2 no job on stdin, 3 cancelled.
 
 **One thing at a time.** One job at a time, and no transcribing while recording: Transcribe is disabled while a recording runs. Starting a recording while a job runs asks whether to cancel the job; the recording always wins.
 
@@ -235,25 +245,26 @@ What this means for the build:
 
 ## 10. User interface
 
-One resizable window, about 900 × 700 to start, with two tabs: **Transcribe a file** and **Record a meeting** (section 9). The file tab, top to bottom:
+One resizable window, about 900 × 700 to start, with two tabs: **Transcribe a file** and **Record a meeting** (section 9). Until Milestone 7 the window shows only the file screen, with no tabs (section 3). It follows the Windows light or dark setting with WPF's Fluent theme. The file tab, top to bottom:
 
-1. **File.** A drop zone ("Drop a recording here") and a Choose recording… button with a file dialog filtered to supported types. Once chosen, show the file's name, duration and size.
+1. **File.** A drop zone ("Drop a recording here"; a file dropped anywhere on the window counts) and a Choose recording… button with a file dialog filtered to supported types. Once chosen, show the file's name, duration, size and folder. A file Talktrace can't read is reported straight away and isn't selected.
 2. **Options**, in one row:
    - **Speakers:** Don't label speakers · Auto-detect · 2 · 3 · 4 · 5 · 6 · 7 · 8. Default Auto-detect. For call recordings: Don't label speakers · Auto-detect · 1–8 (other participants).
-   - **Model:** Fast (English) · Multilingual. Default Fast.
-   - **Include timestamps:** checkbox, off by default.
-   - **Advanced** (collapsed): clustering threshold, thread count, segment and chunk limits.
-3. **Transcribe** button, the primary action. It becomes **Cancel** while a job runs.
-4. **Progress.** A stage label (Reading audio · Identifying speakers · Transcribing 42 of 310 · Saving), a progress bar, elapsed time, and estimated time left once transcription starts.
-5. **Transcript.** A scrollable, editable text box showing the result.
+   - **Model:** Fast (English) · Multilingual. Default Fast. A profile whose speech model isn't installed shows as "(not installed)" and can't be chosen. If the chosen options need a model that's missing, a note above the file area names it, with an Open models folder button (section 8, startup check).
+   - **Include timestamps:** checkbox, off by default. Like every option, it applies to the next transcription.
+   - **Advanced** (a toggle that shows a second row): clustering threshold (0.6), threads (6, or fewer on a smaller processor), longest speech segment (20 s) and longest chunk (25 s), with Reset. Values outside sensible ranges are reported when Transcribe is clicked.
+3. **Transcribe** button, the primary action. It becomes **Cancel** while a job runs; options and file choice are locked meanwhile.
+4. **Progress.** A stage label (Reading audio · Finding speech · Identifying speakers · Transcribing 42 of 310 · Saving), a progress bar per stage (a busy bar while a stage reports nothing), elapsed time, and the time left once a few chunks are transcribed. Afterwards the label says how the job ended ("Done in 6:02", "Cancelled").
+5. **Transcript.** A scrollable, editable text box showing the result; read-only while a job runs.
 6. **Speakers panel**, beside or below the transcript. One row per speaker: the label, an editable name box, and the first full sentence that speaker said. A play-a-sample button if it's cheap with NAudio. Renaming updates the transcript immediately.
-7. **Actions:** Save as… (default `<recording name> - transcript.txt` in the recording's folder), Copy all, Open folder.
+7. **Actions:** Save (overwrites the file last saved, at first the auto-saved one), Save as… (default `<recording name> - transcript.txt` in the recording's folder), Copy all, Open folder (shows the saved transcript in Explorer). A status line beside them says where the transcript was saved, or that there are unsaved changes.
 
 **Behaviour**
 
 - Auto-save to the default path as soon as a job finishes. Never overwrite an existing file; add " (2)" instead. Later renames and edits are saved with Save, which overwrites that auto-saved file.
 - Remember the last options, the recording mode for each playback device, and the window size in `%LOCALAPPDATA%\Talktrace\settings.json`.
-- The window stays responsive throughout. Cancel takes effect within about 2 s at any stage. Closing the window mid-job asks for confirmation, then cancels.
+- The window stays responsive throughout. Cancel takes effect within about 2 s at any stage. Closing the window mid-job asks for confirmation (Stop and close · Keep transcribing), then cancels.
+- With unsaved edits in the transcript, starting another transcription or closing the window asks Save · Don't save · Cancel.
 - Errors appear inline in plain language, with a Copy details link; the full details go to the log.
 - One file at a time; no queue.
 - Shortcuts: Ctrl+O choose recording, Ctrl+S save, Esc cancel a running job.
@@ -298,6 +309,7 @@ When it finishes, the CLI prints per-stage timings and the real-time factor.
 - **Speed target.** Fast profile, 60-minute 3-speaker recording, under 20 minutes on this machine. Baseline from the 50-minute test: about 2 minutes transcription and about 6 minutes speaker identification. Measure in Milestones 2 and 3; if far off, profile and report where the time goes before optimising.
 - **Milestone 2 result** (speaker labels off, 49-minute M4A test recording, quiet machine): reading audio 13 s, finding speech 10 s, transcribing 88 s; 110 s in total, real-time factor 0.037, peak memory 1.86 GB.
 - **Milestone 3 result** (speaker labels on, Auto, quiet machine, on mains power): 49-minute test recording: reading audio 13 s, finding speech 10 s, identifying speakers 247 s, transcribing 91 s; 360 s in total, real-time factor 0.122, peak memory 1.88 GB; 4 speakers, 69 turns. `--speakers 5` gave the same 4 speakers: the fifth person said very little, and no fifth voice with words of its own was found. 98-minute file (the test recording joined to itself, 16 kHz WAV): 722 s in total, real-time factor 0.122, the same 4 speakers across both halves. A 60-minute recording would take about 7.3 minutes, well inside the 20-minute target. On battery, the same work ran about 2× slower.
+- **Milestone 4 result** (the published app, same recording, Auto, quiet machine, on mains power, worker at below-normal priority): done in 5:55 against the CLI's 6:00, worker peak 1.88 GB, 4 speakers and 69 turns. The saved transcript's turns are identical to Milestone 3's CLI output. Cancel took 2.1 s during speaker identification (the worker was killed after its 2 s grace) and stopped at once while reading audio; nothing was saved either time.
 - **Memory, Milestone 3.** 2.59 GB peak on the 98-minute file, about 90 MB over the target; scaling between 49 and 98 minutes puts 90 minutes at about 2.47 GB. Speaker identification alone peaked at 1.83 GB on that file, so the overall peak comes later, most likely from memory sherpa-onnx keeps after speaker identification while the speech model loads. Not yet investigated.
 - **Threads.** 6 threads was fastest in the Milestone 2 benchmark and is the default. `Talktrace.Cli <file> --benchmark` re-runs the comparison, for example after a sherpa-onnx upgrade.
 - **Memory target.** Under about 2.5 GB peak in the worker for a 90-minute recording on the Fast profile. Report the actual figure. Milestone 2 measured 1.86 GB for 49 minutes without speaker labels. A 90-minute file needs a few hundred MB more for audio, which leaves speaker identification only a few hundred MB of headroom, so measure it in Milestone 3.

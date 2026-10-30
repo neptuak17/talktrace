@@ -1,9 +1,238 @@
 <Window x:Class="Talktrace.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:Talktrace.App"
+        mc:Ignorable="d"
+        d:DataContext="{d:DesignInstance Type=local:MainViewModel}"
         Title="Talktrace"
         Width="900"
-        Height="700">
-  <!-- Placeholder until Milestone 4. -->
-  <TextBlock Margin="16" Text="Talktrace" />
+        Height="700"
+        MinWidth="640"
+        MinHeight="560"
+        AllowDrop="True"
+        PreviewDragEnter="OnPreviewDragOver"
+        PreviewDragOver="OnPreviewDragOver"
+        PreviewDrop="OnPreviewDrop">
+  <Window.Resources>
+    <BooleanToVisibilityConverter x:Key="Visible" />
+    <Style x:Key="Caption" TargetType="TextBlock">
+      <Setter Property="Margin" Value="0,0,0,4" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+    </Style>
+  </Window.Resources>
+
+  <Window.InputBindings>
+    <KeyBinding Key="O" Modifiers="Control" Command="{Binding ChooseRecordingCommand}" />
+    <KeyBinding Key="S" Modifiers="Control" Command="{Binding SaveCommand}" />
+    <KeyBinding Key="Escape" Command="{Binding CancelCommand}" />
+  </Window.InputBindings>
+
+  <Grid Margin="24,16,24,20">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- Missing models -->
+    <Border Grid.Row="0"
+            Margin="0,0,0,16"
+            Padding="16,12"
+            CornerRadius="6"
+            Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
+            Visibility="{Binding HasModelsMessage, Converter={StaticResource Visible}}">
+      <DockPanel>
+        <Button Margin="16,0,0,0"
+                VerticalAlignment="Center"
+                Command="{Binding OpenModelsFolderCommand}"
+                Content="Open models folder"
+                DockPanel.Dock="Right" />
+        <TextBlock VerticalAlignment="Center" Text="{Binding ModelsMessage}" TextWrapping="Wrap" />
+      </DockPanel>
+    </Border>
+
+    <!-- 1. File -->
+    <Grid Grid.Row="1" MinHeight="76">
+      <Rectangle Fill="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                 RadiusX="6"
+                 RadiusY="6"
+                 Stroke="{DynamicResource ControlStrongStrokeColorDefaultBrush}"
+                 StrokeDashArray="4 3"
+                 StrokeThickness="1.5" />
+      <DockPanel Margin="20,12">
+        <Button VerticalAlignment="Center"
+                Command="{Binding ChooseRecordingCommand}"
+                Content="Choose recording…"
+                DockPanel.Dock="Right"
+                ToolTip="Ctrl+O" />
+        <StackPanel Margin="0,0,16,0" VerticalAlignment="Center">
+          <TextBlock FontSize="16"
+                     FontWeight="SemiBold"
+                     Text="{Binding RecordingTitle}"
+                     TextTrimming="CharacterEllipsis" />
+          <TextBlock Margin="0,2,0,0"
+                     Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                     Text="{Binding RecordingDetails}"
+                     TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+      </DockPanel>
+    </Grid>
+
+    <!-- 2. Options -->
+    <WrapPanel Grid.Row="2" Margin="0,16,0,0" IsEnabled="{Binding IsIdle}">
+      <StackPanel Margin="0,0,16,8">
+        <TextBlock Style="{StaticResource Caption}" Text="Speakers" />
+        <ComboBox Width="200"
+                  DisplayMemberPath="Label"
+                  ItemsSource="{Binding SpeakerChoices}"
+                  SelectedItem="{Binding SelectedSpeakers}" />
+      </StackPanel>
+      <StackPanel Margin="0,0,16,8">
+        <TextBlock Style="{StaticResource Caption}" Text="Model" />
+        <ComboBox Width="200"
+                  DisplayMemberPath="Label"
+                  ItemsSource="{Binding Profiles}"
+                  SelectedItem="{Binding SelectedProfile}">
+          <ComboBox.ItemContainerStyle>
+            <Style BasedOn="{StaticResource {x:Type ComboBoxItem}}" TargetType="ComboBoxItem">
+              <Setter Property="IsEnabled" Value="{Binding IsInstalled}" />
+            </Style>
+          </ComboBox.ItemContainerStyle>
+        </ComboBox>
+      </StackPanel>
+      <CheckBox Margin="0,0,16,8"
+                VerticalAlignment="Bottom"
+                Content="Include timestamps"
+                IsChecked="{Binding IncludeTimestamps}" />
+      <ToggleButton x:Name="AdvancedToggle"
+                    Margin="0,0,0,8"
+                    VerticalAlignment="Bottom"
+                    Content="Advanced" />
+    </WrapPanel>
+
+    <!-- Advanced -->
+    <WrapPanel Grid.Row="3"
+               Margin="0,4,0,0"
+               IsEnabled="{Binding IsIdle}"
+               Visibility="{Binding IsChecked, ElementName=AdvancedToggle, Converter={StaticResource Visible}}">
+      <StackPanel Margin="0,0,16,8"
+                  ToolTip="Voices closer than this are one speaker. Lower finds more speakers, higher fewer. Default 0.6.">
+        <TextBlock Style="{StaticResource Caption}" Text="Clustering threshold" />
+        <TextBox Width="120" Text="{Binding ClusteringThreshold, UpdateSourceTrigger=PropertyChanged}" />
+      </StackPanel>
+      <StackPanel Margin="0,0,16,8" ToolTip="Processor threads for transcription and speaker identification.">
+        <TextBlock Style="{StaticResource Caption}" Text="Threads" />
+        <TextBox Width="120" Text="{Binding Threads, UpdateSourceTrigger=PropertyChanged}" />
+      </StackPanel>
+      <StackPanel Margin="0,0,16,8" ToolTip="After this long, a stretch of speech is split at the next short pause.">
+        <TextBlock Style="{StaticResource Caption}" Text="Longest speech segment (s)" />
+        <TextBox Width="120" Text="{Binding MaxSpeechSeconds, UpdateSourceTrigger=PropertyChanged}" />
+      </StackPanel>
+      <StackPanel Margin="0,0,16,8" ToolTip="The most audio the speech model transcribes at once.">
+        <TextBlock Style="{StaticResource Caption}" Text="Longest chunk (s)" />
+        <TextBox Width="120" Text="{Binding MaxChunkSeconds, UpdateSourceTrigger=PropertyChanged}" />
+      </StackPanel>
+      <Button Margin="0,0,0,8"
+              VerticalAlignment="Bottom"
+              Command="{Binding ResetAdvancedCommand}"
+              Content="Reset" />
+    </WrapPanel>
+
+    <!-- 3. Transcribe and 4. Progress -->
+    <Grid Grid.Row="4" Margin="0,12,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+      <Grid>
+        <Button MinWidth="120"
+                MinHeight="36"
+                HorizontalAlignment="Stretch"
+                Command="{Binding TranscribeCommand}"
+                Content="Transcribe"
+                Style="{DynamicResource AccentButtonStyle}"
+                Visibility="{Binding IsIdle, Converter={StaticResource Visible}}" />
+        <Button MinWidth="120"
+                MinHeight="36"
+                HorizontalAlignment="Stretch"
+                Command="{Binding CancelCommand}"
+                Content="Cancel"
+                ToolTip="Esc"
+                Visibility="{Binding IsRunning, Converter={StaticResource Visible}}" />
+      </Grid>
+      <StackPanel Grid.Column="1" Margin="20,0,0,0" VerticalAlignment="Center">
+        <DockPanel>
+          <TextBlock Margin="16,0,0,0"
+                     DockPanel.Dock="Right"
+                     Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                     Text="{Binding TimeText}" />
+          <TextBlock Text="{Binding StageText}" TextTrimming="CharacterEllipsis" />
+        </DockPanel>
+        <ProgressBar Margin="0,8,0,0"
+                     IsIndeterminate="{Binding ProgressIsIndeterminate}"
+                     Maximum="1"
+                     Visibility="{Binding IsRunning, Converter={StaticResource Visible}}"
+                     Value="{Binding ProgressValue, Mode=OneWay}" />
+      </StackPanel>
+    </Grid>
+
+    <!-- Errors -->
+    <Border Grid.Row="5"
+            Margin="0,16,0,0"
+            Padding="16,12"
+            CornerRadius="6"
+            Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}"
+            Visibility="{Binding HasError, Converter={StaticResource Visible}}">
+      <DockPanel>
+        <TextBlock Margin="16,0,0,0"
+                   VerticalAlignment="Center"
+                   DockPanel.Dock="Right"
+                   Visibility="{Binding HasErrorDetails, Converter={StaticResource Visible}}">
+          <Hyperlink Command="{Binding CopyErrorDetailsCommand}">Copy details</Hyperlink>
+        </TextBlock>
+        <TextBlock VerticalAlignment="Center" Text="{Binding ErrorMessage}" TextWrapping="Wrap" />
+      </DockPanel>
+    </Border>
+
+    <!-- 5. Transcript -->
+    <Grid Grid.Row="6" Margin="0,16,0,0">
+      <TextBox x:Name="Transcript"
+               Padding="12,10"
+               VerticalContentAlignment="Top"
+               AcceptsReturn="True"
+               IsReadOnly="{Binding IsTranscriptReadOnly}"
+               Text="{Binding TranscriptText, UpdateSourceTrigger=PropertyChanged}"
+               TextWrapping="Wrap"
+               VerticalScrollBarVisibility="Auto" />
+      <TextBlock Margin="16,12"
+                 HorizontalAlignment="Left"
+                 VerticalAlignment="Top"
+                 Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                 IsHitTestVisible="False"
+                 Text="The transcript appears here."
+                 Visibility="{Binding IsTranscriptReadOnly, Converter={StaticResource Visible}}" />
+    </Grid>
+
+    <!-- 7. Actions -->
+    <DockPanel Grid.Row="7" Margin="0,12,0,0">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button Command="{Binding SaveCommand}" Content="Save" ToolTip="Ctrl+S" />
+        <Button Margin="8,0,0,0" Command="{Binding SaveAsCommand}" Content="Save as…" />
+        <Button Margin="8,0,0,0" Command="{Binding CopyAllCommand}" Content="Copy all" />
+        <Button Margin="8,0,0,0" Command="{Binding OpenFolderCommand}" Content="Open folder" />
+      </StackPanel>
+      <TextBlock Margin="0,0,16,0"
+                 VerticalAlignment="Center"
+                 Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                 Text="{Binding StatusText}"
+                 TextTrimming="CharacterEllipsis" />
+    </DockPanel>
+  </Grid>
 </Window>
