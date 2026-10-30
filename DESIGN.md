@@ -67,6 +67,7 @@ Alongside these, one standing design rule: **nothing in v1 may compromise a poss
 | The app and the tests reference `Talktrace.Cli` as a project, so builds put `Talktrace.Cli.exe` next to them. | The app launches the worker from its own folder (section 18, rule 2), so a plain `dotnet build` of the app must put it there too. Publishing still publishes both into one folder. |
 | The worker carries on when stdin closes, and the app ignores any stdout line that isn't a protocol message, without keeping it. | A closed stdin means the app has gone; finishing the job means its transcript is still saved. Native libraries can print to stdout, and a garbled line could hold transcript text, so it is counted and dropped, never logged. |
 | Cancellation is also checked just before each model loads. | Loading the speech model takes a few seconds; checking first lets Cancel stop between stages without the 2 s kill. |
+| Smaller Milestone 4 defaults, accepted at its review without changes: a visible Save button beside Save as… (the same as Ctrl+S); options, Include timestamps among them, apply to the next transcription and never reformat the one on screen; Esc cancels a running job without asking; Advanced accepts a clustering threshold between 0 and 2, threads from 1 to the processor count, and 5–60 s for the two lengths; time left is rounded to the nearest minute, or "less than a minute". | Put to the user in the Milestone 4 review, which the user approved as it stood. |
 | Choosing or dropping a file reads its length from the header first, so an unreadable file is reported then, not after Transcribe. | Media Foundation opens the file without decoding it, which takes a moment, and the same error messages as decoding apply. |
 
 ## 4. Technology
@@ -247,7 +248,7 @@ What this means for the build:
 
 One resizable window, about 900 × 700 to start, with two tabs: **Transcribe a file** and **Record a meeting** (section 9). Until Milestone 7 the window shows only the file screen, with no tabs (section 3). It follows the Windows light or dark setting with WPF's Fluent theme. The file tab, top to bottom:
 
-1. **File.** A drop zone ("Drop a recording here"; a file dropped anywhere on the window counts) and a Choose recording… button with a file dialog filtered to supported types. Once chosen, show the file's name, duration, size and folder. A file Talktrace can't read is reported straight away and isn't selected.
+1. **File.** A drop zone ("Drop a recording here"; a file dropped anywhere on the window counts) and a Choose recording… button with a file dialog filtered to supported types. Once chosen, show the file's name, duration, size and folder. A file Talktrace can't read is reported straight away and isn't selected; the previous recording stays chosen.
 2. **Options**, in one row:
    - **Speakers:** Don't label speakers · Auto-detect · 2 · 3 · 4 · 5 · 6 · 7 · 8. Default Auto-detect. For call recordings: Don't label speakers · Auto-detect · 1–8 (other participants).
    - **Model:** Fast (English) · Multilingual. Default Fast. A profile whose speech model isn't installed shows as "(not installed)" and can't be chosen. If the chosen options need a model that's missing, a note above the file area names it, with an Open models folder button (section 8, startup check).

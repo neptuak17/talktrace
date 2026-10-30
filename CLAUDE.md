@@ -4,7 +4,7 @@ A native Windows on ARM64 desktop app that turns meeting recordings into speaker
 
 **[DESIGN.md](DESIGN.md) is the source of truth.** Read it before changing anything, and update it when a decision changes. Work milestone by milestone (DESIGN.md section 14) and stop at the end of each one for review.
 
-Progress: Milestones 1 (scaffold), 2 (transcription without speakers) and 3 (speaker labels) done and reviewed. Milestone 4 (the app) built and awaiting the user's review. Next: Milestone 5 (polish).
+Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speaker labels) and 4 (the app) done and reviewed. Next: Milestone 5 (polish).
 
 ## Working agreement
 
@@ -33,7 +33,12 @@ Progress: Milestones 1 (scaffold), 2 (transcription without speakers) and 3 (spe
 - The app runs every job through Core's `WorkerClient`, which starts `Talktrace.Cli.exe --worker` from the app's own folder. The app's project reference to the CLI puts the exe there in builds; the tests reference it the same way for the worker tests.
 - WPF with `ThemeMode="System"` (the Fluent theme, still experimental: WPF0001 is suppressed in the app's project). WPF projects' implicit usings leave out `System.IO`.
 - `ProgressBar.Value` (any `RangeBase`) binds two-way by default; bind it to a read-only view-model property with `Mode=OneWay`, or the window crashes on load.
-- To check the app on a real recording without reading the transcript, drive it with UI Automation from PowerShell and read only TextBlocks (stage, status, errors); the transcript is a TextBox. Never screenshot the window while a real recording's transcript is on screen. The Open dialog's controls show as panes to UI Automation: set the file name with `WM_SETTEXT` on the last control with id 1148, then `BM_CLICK` the Open button (id 1).
+- To check the app on a real recording without reading the transcript, drive it with UI Automation from PowerShell and read only TextBlocks (stage, status, errors); the transcript is a TextBox. Never screenshot the window while a real recording's transcript is on screen. Screenshots of the window: `PrintWindow` with flag 2 after `SetProcessDPIAware`.
+  - The TextBlocks include button labels, so match stage text exactly ("Cancelled", not "Cancel").
+  - Invoking a WPF button through UI Automation returns before its click runs, so a dialog it opens appears a moment later; wait for it.
+  - The file dialogs' controls show as panes, without patterns. Open dialog: `WM_SETTEXT` the file name into the last control with id 1148, then click Open (id 1). Save dialog: the file name box is the id 1001 control whose name is the current file name (another 1001 is the address bar).
+  - Click dialog buttons with `PostMessage(BM_CLICK)`, not `SendMessage`: if the click opens another modal (such as "replace the file?"), `SendMessage` blocks until it closes.
+- The Fluent theme draws an indeterminate progress bar as a moving dash with no track, so a screenshot can miss it.
 
 ## Hard constraints
 
@@ -82,6 +87,7 @@ dotnet publish src/Talktrace.App -c Release -r win-arm64 --self-contained true -
 dotnet publish src/Talktrace.Cli -c Release -r win-arm64 --self-contained true -o artifacts/publish
 .\scripts\verify-arm64.ps1
 
+.\artifacts\publish\Talktrace.exe                                                   # the app
 .\artifacts\publish\Talktrace.Cli.exe <recording> [--speakers auto|none|1..8] [--threshold <x>] [--timestamps] [--threads <n>]   # saves "<name> - transcript.txt"
 .\artifacts\publish\Talktrace.Cli.exe <recording> --benchmark [--minutes 10]        # thread and batch timings
 ```
@@ -96,7 +102,7 @@ Test recordings live in the gitignored `testdata\` folder. Never print, log or c
 - sherpa-onnx receives model paths as ANSI strings, so model paths must be plain ASCII.
 - sherpa-onnx's diarization progress callback can't cancel a run; that's why jobs run in a worker process.
 - .NET's WPF ships `vcruntime140_cor3.dll` as ARM64X. It runs as native ARM64 in our process, and `verify-arm64.ps1` accepts it.
-- The shell is Windows PowerShell 5.1. It turns anything a native tool writes to stderr (git push progress, curl's progress bar) into red NativeCommandError text, and with `$ErrorActionPreference = 'Stop'` into a failure. Set `$ErrorActionPreference = 'Continue'` around native calls, pipe their output through `ForEach-Object { "$_" }`, and judge success by `$LASTEXITCODE`.
+- The shell is Windows PowerShell 5.1. It turns anything a native tool writes to stderr (git push progress, curl's progress bar) into red NativeCommandError text, and with `$ErrorActionPreference = 'Stop'` into a failure. Set `$ErrorActionPreference = 'Continue'` around native calls, pipe their output through `ForEach-Object { "$_" }`, and judge success by `$LASTEXITCODE`. It also reads a `.ps1` file without a byte-order mark as ANSI, so write non-ASCII characters in scripts as `[char]0x2026` and the like.
 - NAudio 3 is span-based: `IWaveProvider.Read(Span<byte>)`. Its source-reader interface isn't public, so `MediaFoundationReader` can't be asked for 16 kHz directly; decode, then use `MediaFoundationResampler`.
 - NAudio.Wasapi's NuGet version list includes a stray 22.0.0; keep versions pinned exactly.
 - For a multi-line commit message, write it to a file and run `git commit -F <file>`. In Windows PowerShell 5.1, `git commit -F -` with a here-string doesn't reach git's stdin; the text arrives as a path and the commit fails.
