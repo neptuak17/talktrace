@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>Talktrace</AssemblyName>
+    <RootNamespace>Talktrace.App</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Talktrace.Core\Talktrace.Core.csproj" />
+    <ProjectReference Include="..\Talktrace.Recording\Talktrace.Recording.csproj" />
+  </ItemGroup>
+</Project>

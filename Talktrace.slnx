@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Talktrace.App/Talktrace.App.csproj" />
+    <Project Path="src/Talktrace.Cli/Talktrace.Cli.csproj" />
+    <Project Path="src/Talktrace.Core/Talktrace.Core.csproj" />
+    <Project Path="src/Talktrace.Recording/Talktrace.Recording.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Talktrace.Tests/Talktrace.Tests.csproj" />
+  </Folder>
+</Solution>

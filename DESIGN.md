@@ -42,6 +42,9 @@ Non-negotiable. If one can't be met, stop and say so.
 | Three call setups are supported: a combined speakerphone in the home office, Bluetooth headphones with a built-in mic when travelling, and the laptop's own speakers and mic. Talktrace remembers the mode for each device. | All three are in use. See section 9. |
 | The repo stays public with no licence for now. | |
 | The repository layout in section 5 is confirmed. | |
+| No Visual C++ runtime needs shipping. | Milestone 1 found that sherpa-onnx and ONNX Runtime import no Visual C++ runtime DLLs, and .NET's own copy for WPF ships in the publish folder. |
+| ARM64X files pass the ARM64 check. | .NET's WPF ships `vcruntime140_cor3.dll` as ARM64X. Its header says ARM64 and an ARM64 process runs its native ARM64 code, so nothing is emulated. |
+| Tests use xUnit v3 on Microsoft.Testing.Platform. | The .NET 10 SDK no longer runs xUnit v3 through the older VSTest runner; this also drops two test packages. |
 
 ## 4. Technology
 
@@ -54,7 +57,7 @@ Non-negotiable. If one can't be met, stop and say so.
 | Audio capture | NAudio `WasapiCapture` (microphone), `WasapiLoopbackCapture` (system audio), `WasapiOut` (silence keep-alive) | Shared mode only, so capture never blocks Teams or other apps. |
 | Logging | A small hand-written file logger | No dependency. |
 | Settings | System.Text.Json | |
-| Tests | xUnit | |
+| Tests | xUnit v3 | Runs on Microsoft.Testing.Platform, opted in through `global.json`. |
 
 All package versions live in `Directory.Packages.props`, pinned exactly; no floating ranges.
 
@@ -131,7 +134,7 @@ All models come from the sherpa-onnx GitHub releases. They are never compiled in
 | Transcription, **Multilingual** profile (25 European languages, detected automatically) | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` | `asr-models` | CC-BY-4.0 |
 | Voice activity detection | `silero_vad.onnx` | `asr-models` | MIT |
 | Speaker segmentation | `sherpa-onnx-pyannote-segmentation-3-0` (`model.int8.onnx`) | `speaker-segmentation-models` | MIT |
-| Speaker embeddings | `nemo_en_titanet_small.onnx` | `speaker-recongition-models` (the misspelling is real; copy it exactly) | CC-BY-4.0 (verify) |
+| Speaker embeddings | `nemo_en_titanet_small.onnx` | `speaker-recongition-models` (the misspelling is real; copy it exactly) | Apache-2.0 (the NeMo Toolkit licence, per NVIDIA's model card) |
 
 The 50-minute test used a fixed speaker count (`--clustering.num-clusters=3`) and 6 threads each for segmentation and embeddings. Auto-detect, which relies on the clustering threshold instead, hasn't been tried yet; Milestone 3 runs it on the same recording and tunes the default threshold if needed.
 
@@ -280,7 +283,7 @@ When it finishes, the CLI prints per-stage timings and the real-time factor.
 ## 13. Build and packaging
 
 - **Publish** with `dotnet publish src/Talktrace.App -c Release -r win-arm64 --self-contained true`, and publish the CLI into the same output folder so both share the native DLLs and the app can launch the worker. A plain folder; use single-file only if the native libraries load reliably that way.
-- **Verify the architecture.** `scripts/verify-arm64.ps1` reads the PE header of every native binary in the output (the .exe files, `onnxruntime.dll`, the sherpa-onnx DLLs and any others) and fails unless each is ARM64 (machine type 0xAA64). It skips managed IL-only assemblies, detected by their CLR header (they report an i386 machine type). Run it after every publish.
+- **Verify the architecture.** `scripts/verify-arm64.ps1` reads the PE header of every native binary in the output (the .exe files, `onnxruntime.dll`, the sherpa-onnx DLLs and any others) and fails unless each is ARM64 (machine type 0xAA64). ARM64X hybrids pass, because an ARM64 process runs their native ARM64 code; ARM64EC and x64 files fail. Managed IL-only assemblies, detected by their CLR header (they report an i386 machine type), are architecture-neutral and pass. It also lists any Visual C++ runtime DLLs the native files import, for information. Run it after every publish.
 - **Package.** `scripts/package.ps1` produces `Talktrace-<version>-win-arm64.zip` with the publish folder, README and THIRD-PARTY-NOTICES, and no models.
 - **Shortcut.** `scripts/install-shortcut.ps1` adds a Start menu shortcut for the current user. No admin rights.
 - **Signing.** Unsigned. The README explains the SmartScreen prompt on first launch (More info → Run anyway).
@@ -348,6 +351,7 @@ Work through these in order. Stop at the end of each one and show the results be
 - **Speaker errors.** Diarization sometimes splits one person into two speakers, merges two similar voices, or pins a short interjection on the wrong person. The speaker-count option and the clustering threshold are the fixes; the README explains both.
 - **Diarization can't be cancelled in-process.** sherpa-onnx ignores the progress callback's return value. This is why jobs run in a worker.
 - **Parakeet model type.** Configure it as a NeMo transducer, or let sherpa-onnx detect the type from the metadata.
+- **Model paths must be plain ASCII.** sherpa-onnx's C# wrapper passes paths as ANSI strings, so a model folder under a user name with accented characters may not open. Talktrace checks and says so; `TALKTRACE_MODELS_DIR` can point somewhere else.
 - **The release name `speaker-recongition-models`** is misspelled in sherpa-onnx's own URLs. Copy it exactly.
 - **Wrong native package.** An ARM64 process can't load x64 DLLs: a win-x64 runtime package builds but fails at load time with a DLL or bad-image error. Always use the win-arm64 runtime package.
 - **Windows "N" editions** ship without Media Foundation. Detect this and point to the Media Feature Pack.

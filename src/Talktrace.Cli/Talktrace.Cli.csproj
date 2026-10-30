@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- CLI, benchmarking, and (from Milestone 4) the worker mode the app launches. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Talktrace.Core\Talktrace.Core.csproj" />
+  </ItemGroup>
+</Project>

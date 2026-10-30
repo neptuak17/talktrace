@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Microphone and system-audio capture (Milestone 7). Runs in the app process, never in the worker. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Talktrace.Core\Talktrace.Core.csproj" />
+  </ItemGroup>
+</Project>

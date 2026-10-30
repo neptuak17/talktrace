@@ -13,8 +13,9 @@ TestResults/
 *.user
 *.suo
 
-# Models (downloaded by scripts/get-models.ps1)
-models/
+# Models (downloaded by scripts/get-models.ps1). Anchored to the root so it doesn't
+# also match the src/Talktrace.Core/Models source folder (git on Windows ignores case).
+/models/
 
 # Local test recordings
 testdata/
