@@ -75,7 +75,7 @@ dotnet publish src/Talktrace.App -c Release -r win-arm64 --self-contained true -
 dotnet publish src/Talktrace.Cli -c Release -r win-arm64 --self-contained true -o artifacts/publish
 .\scripts\verify-arm64.ps1
 
-.\artifacts\publish\Talktrace.Cli.exe <recording> [--timestamps] [--threads <n>]   # saves "<name> - transcript.txt"
+.\artifacts\publish\Talktrace.Cli.exe <recording> [--speakers auto|none|1..8] [--threshold <x>] [--timestamps] [--threads <n>]   # saves "<name> - transcript.txt"
 .\artifacts\publish\Talktrace.Cli.exe <recording> --benchmark [--minutes 10]        # thread and batch timings
 ```
 
@@ -92,3 +92,4 @@ Test recordings live in the gitignored `testdata\` folder. Never print, log or c
 - The shell is Windows PowerShell 5.1. It turns anything a native tool writes to stderr (git push progress, curl's progress bar) into red NativeCommandError text, and with `$ErrorActionPreference = 'Stop'` into a failure. Set `$ErrorActionPreference = 'Continue'` around native calls, pipe their output through `ForEach-Object { "$_" }`, and judge success by `$LASTEXITCODE`.
 - NAudio 3 is span-based: `IWaveProvider.Read(Span<byte>)`. Its source-reader interface isn't public, so `MediaFoundationReader` can't be asked for 16 kHz directly; decode, then use `MediaFoundationResampler`.
 - NAudio.Wasapi's NuGet version list includes a stray 22.0.0; keep versions pinned exactly.
+- For a multi-line commit message, write it to a file and run `git commit -F <file>`. In Windows PowerShell 5.1, `git commit -F -` with a here-string doesn't reach git's stdin; the text arrives as a path and the commit fails.

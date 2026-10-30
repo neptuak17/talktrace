@@ -136,7 +136,7 @@ Core runs these stages in order. Every threshold lives in one options class so i
 
    Output: a list of (start, end, speaker), sorted by start; different speakers' segments can overlap.
 5. **Transcribe.** Create one `OfflineRecognizer` for the chosen model and reuse it for every chunk, each chunk as its own stream. Keep the text and the token timestamps, and group tokens into words with absolute start and end times. Progress = chunks done out of total. Thread count comes from a setting, default 6 (fastest in the Milestone 2 benchmark). Chunks are decoded one at a time; batching was slower.
-6. **Assign speakers to words.** Each word takes the diarization speaker that overlaps it most. A word that falls in a gap between speaker segments takes the nearest segment within about 1 s, otherwise the previous word's speaker. A run of words shorter than about 0.5 s, inside another speaker's run with no pause (0.5 s or more) on either side, is given to that speaker. With speaker labels off, every word gets one speaker.
+6. **Assign speakers to words.** Each word takes the diarization speaker that overlaps it most. A word that falls in a gap between speaker segments takes the nearest segment within about 1 s, otherwise the previous word's speaker; words before the first speaker found take that speaker, and if no speaker was found at all, every word goes to Speaker 1. A run of words shorter than about 0.5 s, inside another speaker's run with no pause (0.5 s or more) on either side, is given to that speaker. With speaker labels off, every word gets one speaker.
 7. **Assemble turns.** Consecutive words from the same speaker form one turn. With speaker labels off, start a new paragraph at pauses longer than about 2 s, and only there. Renumber speakers in order of first appearance, so the first voice heard is Speaker 1. Trim whitespace and drop empty turns.
 8. **Format and save** (section 11). Auto-save the moment the job finishes.
 
@@ -274,7 +274,7 @@ Raj: Sounds good. I've got the updated vendor numbers.
 Dana: Great, go ahead.
 ```
 
-- **Speakers line:** every speaker in order of first appearance, by current name; unrenamed speakers show as Speaker N. Omitted when speaker labels are off.
+- **Speakers line:** every speaker in order of first appearance, by current name; unrenamed speakers show as Speaker N. Omitted when speaker labels are off, or when no speech was found. A speaker counts only if they have words: with a chosen count, a voice that was found but has no words of its own doesn't appear.
 - **With timestamps:** each turn starts with its start time: `[00:03:12] Speaker 1: …`. For recordings, times are from the start of the recording.
 - **Renamed speakers:** the chosen names replace the labels everywhere.
 - **Speaker labels off:** no labels; paragraphs split at pauses longer than about 2 s, and only there.
@@ -344,7 +344,7 @@ Work through these in order. Stop at the end of each one and show the results be
 
 **Testing**
 
-- **Unit tests, no models needed:** chunk building (packing, splitting, padding), assigning speakers to words and smoothing, speaker renumbering, turn assembly, paragraphs with labels off, echo removal, formatting with and without timestamps, renaming and the Speakers line, the aligned writer (with simulated device clocks), and WAV header recovery.
+- **Unit tests, no models needed:** chunk building (packing, splitting, padding), merging speaker groups by voice, clean speech for voice prints, assigning speakers to words and smoothing, speaker renumbering, turn assembly, paragraphs with labels off, echo removal, formatting with and without timestamps, renaming and the Speakers line, the aligned writer (with simulated device clocks), and WAV header recovery.
 - **Integration tests** run only when `TALKTRACE_MODELS_DIR` points at the models (using the sherpa-onnx sample WAVs), plus local recordings when `TALKTRACE_TESTDATA` points at `testdata\`; otherwise they skip.
 - **Audio inputs:** WAV, MP3, M4A, a Teams or Zoom MP4 export, WMA, a stereo file, 44.1 and 48 kHz files, a corrupt file and a zero-length file.
 - **Long input:** one recording over 90 minutes, checking memory and time. No real one exists yet; Milestone 3 made `testdata\test_recording x2.wav` (98 minutes, the test recording joined to itself, 16 kHz mono) for this.
@@ -381,7 +381,7 @@ Work through these in order. Stop at the end of each one and show the results be
 - **sherpa-onnx's clustering over-splits and wastes fixed counts.** Complete linkage with no minimum cluster size turns stray embeddings into near-empty speakers. Talktrace merges by voice afterwards (section 7, step 4). Each extra group also costs memory: 61 groups pushed a 49-minute job to a 3.4 GB peak.
 - **Very quiet participants.** Someone with less than about 15 s of speech is folded into the closest voice on Auto. Choosing the speaker count keeps them as a separate speaker when their voice is distinct.
 - **Parakeet model type.** Configure it as a NeMo transducer, or let sherpa-onnx detect the type from the metadata.
-- **Benchmark on a quiet machine.** Stage timings varied up to 3× when other heavy work (a build, a test run) ran at the same time.
+- **Benchmark on a quiet machine, on mains power.** Stage timings varied up to 3× when other heavy work (a build, a test run) ran at the same time, and ran about 2× slower on battery.
 - **Model paths must be plain ASCII.** sherpa-onnx's C# wrapper passes paths as ANSI strings, so a model folder under a user name with accented characters may not open. Talktrace checks and says so; `TALKTRACE_MODELS_DIR` can point somewhere else.
 - **The release name `speaker-recongition-models`** is misspelled in sherpa-onnx's own URLs. Copy it exactly.
 - **Wrong native package.** An ARM64 process can't load x64 DLLs: a win-x64 runtime package builds but fails at load time with a DLL or bad-image error. Always use the win-arm64 runtime package.
