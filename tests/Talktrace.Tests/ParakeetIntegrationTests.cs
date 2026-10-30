@@ -2,6 +2,7 @@ using Talktrace.Core;
 using Talktrace.Core.Asr;
 using Talktrace.Core.Audio;
 using Talktrace.Core.Models;
+using Talktrace.Core.Speakers;
 using Talktrace.Core.Transcripts;
 
 namespace Talktrace.Tests;
@@ -46,13 +47,67 @@ public class ParakeetIntegrationTests
             File.Copy(SampleWav(modelsDir), recording);
 
             TranscriptResult result = await Transcriber.TranscribeAsync(
-                recording, new TranscribeOptions { NumThreads = 4 }, null, TestContext.Current.CancellationToken);
+                recording, new TranscribeOptions { Speakers = SpeakerSetting.None, NumThreads = 4 }, null,
+                TestContext.Current.CancellationToken);
 
             Assert.Equal(Path.Combine(folder, "sample - transcript.txt"), result.SavedPath);
             string saved = await File.ReadAllTextAsync(result.SavedPath, TestContext.Current.CancellationToken);
             Assert.StartsWith("Transcript: sample.wav\r\n", saved);
             Assert.Contains("portrait", saved);
+            Assert.DoesNotContain("Speaker", saved);
             Assert.NotEmpty(result.Turns);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Identifies_the_speaker_in_the_sample_wav()
+    {
+        string modelsDir = RequireModels();
+        AudioClip audio = AudioDecoder.Decode(SampleWav(modelsDir), TestContext.Current.CancellationToken);
+        var progress = new List<(int Done, int Total)>();
+
+        IReadOnlyList<SpeakerSegment> segments = SpeakerDiarizer.FindSpeakers(
+            audio,
+            Path.Combine(modelsDir, SpeakerDiarizer.SegmentationModelFile),
+            Path.Combine(modelsDir, SpeakerDiarizer.EmbeddingModelFile),
+            new TranscribeOptions { NumThreads = 4 },
+            (done, total) => progress.Add((done, total)),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(segments);
+        Assert.All(segments, s => Assert.InRange(s.Start, 0, s.End));
+        Assert.All(segments, s => Assert.InRange(s.End, s.Start, audio.DurationSeconds + 0.5));
+        Assert.Equal(segments.OrderBy(s => s.Start), segments);
+        Assert.NotEmpty(progress);
+        Assert.Equal(progress[^1].Total, progress[^1].Done);
+    }
+
+    [Fact]
+    public async Task Pipeline_labels_speakers()
+    {
+        string modelsDir = RequireModels();
+        string folder = Directory.CreateTempSubdirectory("talktrace-").FullName;
+        try
+        {
+            string recording = Path.Combine(folder, "sample.wav");
+            File.Copy(SampleWav(modelsDir), recording);
+
+            TranscriptResult result = await Transcriber.TranscribeAsync(
+                recording, new TranscribeOptions { Speakers = SpeakerSetting.Auto, NumThreads = 4 }, null,
+                TestContext.Current.CancellationToken);
+
+            Assert.True(result.SpeakerLabels);
+            Assert.NotEmpty(result.Turns);
+            Assert.All(result.Turns, t => Assert.NotNull(t.Speaker));
+            Assert.Equal(1, result.Turns[0].Speaker);
+            Assert.Contains(result.Timings, t => t.Stage == TranscribeStage.IdentifyingSpeakers);
+            string saved = await File.ReadAllTextAsync(result.SavedPath, TestContext.Current.CancellationToken);
+            Assert.Contains("\r\nSpeakers: Speaker 1", saved);
+            Assert.Contains("\r\n\r\nSpeaker 1: ", saved);
         }
         finally
         {

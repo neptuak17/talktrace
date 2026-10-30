@@ -83,18 +83,6 @@ public sealed class ParakeetRecognizer : IDisposable
 
     public void Dispose() => _recognizer.Dispose();
 
-    private static string ModelFile(string directory, string name)
-    {
-        string path = Path.Combine(directory, name);
-        if (!File.Exists(path))
-            throw new FileNotFoundException($"Model file not found: {path}", path);
-
-        // sherpa-onnx takes paths as ANSI strings, so a path outside ASCII may not open.
-        if (path.Any(c => c > 127))
-            throw new NotSupportedException(
-                $"The model path contains characters sherpa-onnx can't open: {path}. " +
-                $"Move the models to a plain path and set {Models.ModelLocator.EnvironmentVariable} to it.");
-
-        return path;
-    }
+    private static string ModelFile(string directory, string name) =>
+        Models.ModelLocator.CheckOpenable(Path.Combine(directory, name));
 }

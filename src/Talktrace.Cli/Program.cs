@@ -5,16 +5,18 @@ using Talktrace.Core.Models;
 using Talktrace.Core.Transcripts;
 
 // Talktrace command line (DESIGN.md section 11): transcribe one file and print per-stage timings.
-// Speaker labels arrive in Milestone 3; until then only --speakers none works.
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 
 const string Usage = """
-    Usage: Talktrace.Cli.exe <file> [--speakers none] [--model fast|multilingual]
-                             [--timestamps] [--out <path>] [--threads <n>]
+    Usage: Talktrace.Cli.exe <file> [--speakers auto|none|1..8] [--model fast|multilingual]
+                             [--timestamps] [--out <path>] [--threads <n>] [--threshold <x>]
            Talktrace.Cli.exe <file> --benchmark [--minutes <n>]
+
+      --speakers   auto (default) finds the number of speakers; none leaves out speaker labels.
+      --threshold  voices closer than this are one speaker, default 0.6: lower finds more speakers.
     """;
 
 string? input = null;
@@ -32,10 +34,24 @@ try
         switch (arg)
         {
             case "--speakers":
-                string speakers = Value();
-                if (speakers != "none")
-                    throw new ArgumentException("Speaker labels aren't available yet; use --speakers none.");
-                options = options with { Speakers = SpeakerSetting.None };
+                options = options with
+                {
+                    Speakers = Value() switch
+                    {
+                        "auto" => SpeakerSetting.Auto,
+                        "none" => SpeakerSetting.None,
+                        var count when int.TryParse(count, out int n) && n is >= 1 and <= 8 => SpeakerSetting.Exactly(n),
+                        var other => throw new ArgumentException($"Unknown speaker setting: {other}. Use auto, none or 1 to 8."),
+                    },
+                };
+                break;
+            case "--threshold":
+                options = options with
+                {
+                    ClusteringThreshold = double.TryParse(Value(), NumberStyles.Float, CultureInfo.InvariantCulture, out double t) && t is > 0 and < 2
+                        ? t
+                        : throw new ArgumentException("--threshold needs a number between 0 and 2, such as 0.6."),
+                };
                 break;
             case "--model":
                 options = options with
@@ -105,9 +121,11 @@ static async Task RunTranscription(string input, TranscribeOptions options)
     progress.Finish();
 
     Console.WriteLine($"Saved: {result.SavedPath}");
+    string paragraphs = result.SpeakerLabels
+        ? $"Speakers: {result.Speakers.Count} · Turns: {result.Turns.Count}"
+        : $"Paragraphs: {result.Turns.Count}";
     Console.WriteLine($"Audio: {TranscriptFormatter.FormatDuration(result.Duration)} · Chunks: {result.ChunkCount} · " +
-                      $"Paragraphs: {result.Turns.Count} · Model: {result.ModelName} · " +
-                      $"Threads: {options.NumThreads}");
+                      $"{paragraphs} · Model: {result.ModelName} · Threads: {options.NumThreads}");
     Console.WriteLine();
     foreach (StageTiming timing in result.Timings)
         Console.WriteLine($"  {StageName(timing.Stage),-20}{Seconds(timing.Elapsed),9}");
@@ -195,6 +213,7 @@ sealed class ConsoleProgress : IProgress<TranscribeProgress>
     {
         TranscribeStage.ReadingAudio => "Reading audio...",
         TranscribeStage.FindingSpeech => $"Finding speech... {p.Done}%",
+        TranscribeStage.IdentifyingSpeakers => $"Identifying speakers... {p.Done * 100 / Math.Max(1, p.Total)}%",
         TranscribeStage.Transcribing => $"Transcribing {p.Done} of {p.Total}",
         TranscribeStage.Saving => "Saving...",
         _ => p.Stage.ToString(),

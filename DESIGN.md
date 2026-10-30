@@ -48,8 +48,17 @@ Alongside these, one standing design rule: **nothing in v1 may compromise a poss
 | ARM64X files pass the ARM64 check. | .NET's WPF ships `vcruntime140_cor3.dll` as ARM64X. Its header says ARM64 and an ARM64 process runs its native ARM64 code, so nothing is emulated. |
 | Tests use xUnit v3 on Microsoft.Testing.Platform. | The .NET 10 SDK no longer runs xUnit v3 through the older VSTest runner; this also drops two test packages. |
 | The recognizer uses 6 threads by default and decodes one chunk at a time. | Milestone 2 benchmark, first 10 minutes of the test recording: 4, 6, 8 and 11 threads gave real-time factors of 0.030, 0.029, 0.031 and 0.033. Batching 2, 4 or 8 chunks per call was slower (0.033 to 0.036). |
-| Nothing in v1 may compromise a possible Microsoft Store release; section 18 lists the rules, and every milestone is checked against them. | Audited after Milestone 2: no conflicts. The only file writes are transcripts next to the recording. Paths come from the app folder or Windows known folders. The `win-arm64` sherpa-onnx package reference is harmless for an x64 build, because the main package already brings every platform's native files and an x64 build selects only the x64 ones. |
+| Nothing in v1 may compromise a possible Microsoft Store release; section 18 lists the rules, and every milestone is checked against them. | Audited after Milestones 2 and 3: no conflicts. Milestone 3 writes nothing new, reads its models through the same locator, assumes no processor, and uses only models already listed with commercial-use licences. The only file writes are transcripts next to the recording. Paths come from the app folder or Windows known folders. The `win-arm64` sherpa-onnx package reference is harmless for an x64 build, because the main package already brings every platform's native files and an x64 build selects only the x64 ones. |
 | With speaker labels off, paragraphs split at pauses only, never on length. | A 100-word cap ending paragraphs at the next sentence end was tried in Milestone 2 and cut paragraphs off mid-thought. Long paragraphs are the accepted trade-off. |
+| Speaker segmentation uses pyannote's full-precision `model.onnx`, not `model.int8.onnx`. | On the 49-minute test recording (fixed count 5), the int8 model found no speaker for 34% of the recognised words, spread evenly through the recording; full precision missed 0.3%. Adding 10 dB of gain didn't help int8, so quantization is the cause. Full precision took 258 s against about 200 s. |
+| Speaker identification uses the same thread count as the recognizer (default 6) for both segmentation and embeddings. | The user's earlier 50-minute test used 6 threads for each. One thread setting keeps Advanced simple. |
+| A speaker count of 1 skips speaker identification and labels every word Speaker 1. | There is nobody to tell apart, and it saves several minutes. |
+| In smoothing (section 7, step 6), a pause means a gap of 0.5 s or more between words. | The same length the VAD treats as a pause (`VadMinSilenceSeconds`). Tunable as `ShortRunPauseSeconds`. |
+| Speakers are found in two stages: sherpa-onnx over-splits, then Talktrace merges the groups by voice (section 7, step 4). The user chose this over only raising sherpa-onnx's threshold. | sherpa-onnx clusters with complete linkage and has no minimum cluster size, so stray embeddings become near-empty "speakers". On the test recording, Auto found 61 speakers at its default threshold of 0.5 and still 10 at 1.1; a fixed count of 4 or 5 was spent on stray groups and merged two real people into one. The merge is how pyannote's own pipeline works, uses only the models already shipped, and takes about 2 s. |
+| Merge settings: split at 1.0, merge voices closer than 0.6, and a speaker needs 15 s of speech unless a chosen count needs more speakers. | On the test recording, the four main voices were 0.71–0.91 apart, and fragments of one voice 0.17–0.53 from it. Auto gave the same four speakers at every merge threshold from 0.4 to 0.7, from both a 0.9 and a 1.1 split. A 5 s minimum let a 12 s group holding 3 words become a fifth speaker on Auto. Each group costs memory in sherpa-onnx (about 35 MB on 98 minutes): splitting at 0.9 pushed the 98-minute job to a 2.69 GB peak; at 1.0, speaker identification peaked at 1.83 GB (27 groups) and at 1.1 at 1.41 GB (15 groups). 1.0 keeps the finer split and still stays below the transcription stage's peak. |
+| With speaker labels on, each turn is one paragraph however long. The user chose this, settling open item 1. | On the test recording (Auto, four speakers): 72 turns, median 80 words; 18 turns over 200 words held 61% of the words, and the longest was 539 words. Splitting at pauses over 1 s would give 145 paragraphs (longest 303 words); over 2 s, 84 paragraphs (longest still 539). |
+| The CLI takes `--threshold` for Auto-detect's clustering threshold. | The app offers it under Advanced; the CLI mirrors the app's options, as it does for `--threads`. |
+| A diarizer or embedding extractor whose model fails to load is detected and reported as a plain error. | sherpa-onnx 2.0.1 returns a null handle, and its C# wrappers don't check it, so the first call would crash the process. Talktrace reads the wrappers' private handle field to check. |
 
 ## 4. Technology
 
@@ -121,9 +130,13 @@ Core runs these stages in order. Every threshold lives in one options class so i
 1. **Decode.** Open the file with Media Foundation, downmix to mono, resample to 16 kHz, convert to float32 in −1 to 1. Holding the whole recording in memory is fine (about 230 MB an hour). Record the duration. An unsupported or corrupt file gets a clear error that names the file type.
 2. **Find speech.** Silero VAD over the whole track gives the speech regions. Drop regions shorter than about 0.3 s; very short clips make the recognizer invent text. After about 20 s of continuous speech the VAD splits at the next short pause, which keeps regions near chunk size.
 3. **Build chunks.** Pack consecutive speech regions into chunks of at most about 25 s, splitting at the gaps between them, and start a new chunk after any pause longer than about 2 s so chunks don't carry long silences. A single region longer than 25 s is split at its quietest 100 ms (energy minimum) in its second half. Pad each chunk by about 0.15 s on each side, clamped to the recording's bounds and to half the gap to the next chunk, so neighbouring chunks never overlap and no word is transcribed twice.
-4. **Find who spoke when** (speaker labels on). Run sherpa-onnx `OfflineSpeakerDiarization` on the whole track: pyannote segmentation 3.0, the speaker-embedding model, fast clustering. If a speaker count was chosen, set the cluster count to it; on Auto, use the clustering threshold (sherpa-onnx's default, adjustable under Advanced). Wire its progress callback to the progress bar. Output: a list of (start, end, speaker).
+4. **Find who spoke when** (speaker labels on). A count of 1 skips this step. Two stages:
+   - **Split.** Run sherpa-onnx `OfflineSpeakerDiarization` on the whole track: pyannote segmentation 3.0 (full precision), the speaker-embedding model, and fast clustering with a deliberately low threshold (`SplitThreshold`, cosine distance 1.0) so it over-splits into groups. Never use sherpa-onnx's fixed cluster count (section 3). Wire its progress callback to the progress bar; it reports only the embedding pass, so the bar sits at 0% while segmentation runs first.
+   - **Merge by voice.** Take one voice print per group with the same embedding model, from up to 60 s of the group's speech, longest stretches first, leaving out stretches where another group also speaks. Groups with at least 15 s of speech merge while their voices are closer than the clustering threshold (cosine distance 0.6, adjustable under Advanced). With a chosen count, they then keep merging down to it, weighting each merge by speaking time (Ward's method) so small groups go first; if there are fewer than the count, the most distinct small groups become speakers too. Every remaining small group joins the speaker whose voice is closest. A group too short for a voice print is dropped, and its words take a neighbour's speaker in step 6.
+
+   Output: a list of (start, end, speaker), sorted by start; different speakers' segments can overlap.
 5. **Transcribe.** Create one `OfflineRecognizer` for the chosen model and reuse it for every chunk, each chunk as its own stream. Keep the text and the token timestamps, and group tokens into words with absolute start and end times. Progress = chunks done out of total. Thread count comes from a setting, default 6 (fastest in the Milestone 2 benchmark). Chunks are decoded one at a time; batching was slower.
-6. **Assign speakers to words.** Each word takes the diarization speaker that overlaps it most. A word that falls in a gap between speaker segments takes the nearest segment within about 1 s, otherwise the previous word's speaker. A run of words shorter than about 0.5 s, inside another speaker's run with no pause on either side, is given to that speaker. With speaker labels off, every word gets one speaker.
+6. **Assign speakers to words.** Each word takes the diarization speaker that overlaps it most. A word that falls in a gap between speaker segments takes the nearest segment within about 1 s, otherwise the previous word's speaker. A run of words shorter than about 0.5 s, inside another speaker's run with no pause (0.5 s or more) on either side, is given to that speaker. With speaker labels off, every word gets one speaker.
 7. **Assemble turns.** Consecutive words from the same speaker form one turn. With speaker labels off, start a new paragraph at pauses longer than about 2 s, and only there. Renumber speakers in order of first appearance, so the first voice heard is Speaker 1. Trim whitespace and drop empty turns.
 8. **Format and save** (section 11). Auto-save the moment the job finishes.
 
@@ -138,10 +151,10 @@ All models come from the sherpa-onnx GitHub releases. They are never compiled in
 | Transcription, **Fast** profile (English, default) | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` | `asr-models` | CC-BY-4.0 |
 | Transcription, **Multilingual** profile (25 European languages, detected automatically) | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` | `asr-models` | CC-BY-4.0 |
 | Voice activity detection | `silero_vad.onnx` | `asr-models` | MIT |
-| Speaker segmentation | `sherpa-onnx-pyannote-segmentation-3-0` (`model.int8.onnx`) | `speaker-segmentation-models` | MIT |
+| Speaker segmentation | `sherpa-onnx-pyannote-segmentation-3-0` (`model.onnx`, full precision; the archive also holds an int8 version, not used) | `speaker-segmentation-models` | MIT |
 | Speaker embeddings | `nemo_en_titanet_small.onnx` | `speaker-recongition-models` (the misspelling is real; copy it exactly) | Apache-2.0 (the NeMo Toolkit licence, per NVIDIA's model card) |
 
-The 50-minute test used a fixed speaker count (`--clustering.num-clusters=3`) and 6 threads each for segmentation and embeddings. Auto-detect, which relies on the clustering threshold instead, hasn't been tried yet; Milestone 3 runs it on the same recording and tunes the default threshold if needed.
+The 50-minute test used a fixed speaker count (`--clustering.num-clusters=3`) and 6 threads each for segmentation and embeddings. The meeting actually had five speakers (the user and four others, one of whom said very little), so 3 was a guess. Milestone 3 found that sherpa-onnx's own clustering can't count speakers reliably and added a merge by voice (section 7, step 4; results in section 12).
 
 Configure Parakeet as a NeMo transducer, or let sherpa-onnx detect the type from the model's metadata. A generic "transducer" setting can fail on a vocabulary-size metadata lookup.
 
@@ -270,8 +283,10 @@ The CLI writes the same format:
 
 ```
 Talktrace.Cli.exe <file> [--speakers auto|none|1..8] [--model fast|multilingual]
-                         [--timestamps] [--out <path>] [--threads <n>]
+                         [--timestamps] [--out <path>] [--threads <n>] [--threshold <x>]
 ```
+
+`--speakers` defaults to auto. `--threshold` sets Auto-detect's clustering threshold.
 
 When it finishes, the CLI prints per-stage timings and the real-time factor.
 
@@ -282,6 +297,8 @@ When it finishes, the CLI prints per-stage timings and the real-time factor.
 - **Native resources.** Dispose recognizers, diarizers and streams deterministically in the worker; the process exiting after each job frees anything left.
 - **Speed target.** Fast profile, 60-minute 3-speaker recording, under 20 minutes on this machine. Baseline from the 50-minute test: about 2 minutes transcription and about 6 minutes speaker identification. Measure in Milestones 2 and 3; if far off, profile and report where the time goes before optimising.
 - **Milestone 2 result** (speaker labels off, 49-minute M4A test recording, quiet machine): reading audio 13 s, finding speech 10 s, transcribing 88 s; 110 s in total, real-time factor 0.037, peak memory 1.86 GB.
+- **Milestone 3 result** (speaker labels on, Auto, quiet machine, on mains power): 49-minute test recording: reading audio 13 s, finding speech 10 s, identifying speakers 247 s, transcribing 91 s; 360 s in total, real-time factor 0.122, peak memory 1.88 GB; 4 speakers, 69 turns. `--speakers 5` gave the same 4 speakers: the fifth person said very little, and no fifth voice with words of its own was found. 98-minute file (the test recording joined to itself, 16 kHz WAV): 722 s in total, real-time factor 0.122, the same 4 speakers across both halves. A 60-minute recording would take about 7.3 minutes, well inside the 20-minute target. On battery, the same work ran about 2× slower.
+- **Memory, Milestone 3.** 2.59 GB peak on the 98-minute file, about 90 MB over the target; scaling between 49 and 98 minutes puts 90 minutes at about 2.47 GB. Speaker identification alone peaked at 1.83 GB on that file, so the overall peak comes later, most likely from memory sherpa-onnx keeps after speaker identification while the speech model loads. Not yet investigated.
 - **Threads.** 6 threads was fastest in the Milestone 2 benchmark and is the default. `Talktrace.Cli <file> --benchmark` re-runs the comparison, for example after a sherpa-onnx upgrade.
 - **Memory target.** Under about 2.5 GB peak in the worker for a 90-minute recording on the Fast profile. Report the actual figure. Milestone 2 measured 1.86 GB for 49 minutes without speaker labels. A 90-minute file needs a few hundred MB more for audio, which leaves speaker identification only a few hundred MB of headroom, so measure it in Milestone 3.
 - **Logging.** `%LOCALAPPDATA%\Talktrace\logs\`, one file per day, kept for 14 days, shared by the app and the worker (each line tagged with its process). Log app version, model profile, thread count, audio duration, file name and type, wall time per stage, real-time factor, and errors with stack traces. **Never** log transcript text or audio.
@@ -330,7 +347,7 @@ Work through these in order. Stop at the end of each one and show the results be
 - **Unit tests, no models needed:** chunk building (packing, splitting, padding), assigning speakers to words and smoothing, speaker renumbering, turn assembly, paragraphs with labels off, echo removal, formatting with and without timestamps, renaming and the Speakers line, the aligned writer (with simulated device clocks), and WAV header recovery.
 - **Integration tests** run only when `TALKTRACE_MODELS_DIR` points at the models (using the sherpa-onnx sample WAVs), plus local recordings when `TALKTRACE_TESTDATA` points at `testdata\`; otherwise they skip.
 - **Audio inputs:** WAV, MP3, M4A, a Teams or Zoom MP4 export, WMA, a stereo file, 44.1 and 48 kHz files, a corrupt file and a zero-length file.
-- **Long input:** one recording over 90 minutes, checking memory and time. None exists yet; until one does, make one locally by joining the test recording to itself (about 98 minutes) and keep it in `testdata\`.
+- **Long input:** one recording over 90 minutes, checking memory and time. No real one exists yet; Milestone 3 made `testdata\test_recording x2.wav` (98 minutes, the test recording joined to itself, 16 kHz mono) for this.
 - **Test recordings:** provided on request and kept in the gitignored `testdata\` folder. Nothing from it is ever committed.
 - **Offline check:** run a full job with networking turned off.
 - **Recording:** a Teams call while Teams has the mic open, once on the speakerphone, once on the Bluetooth headphones and once on the laptop's own speakers and mic; connecting the headphones mid-call; an in-person meeting; pause and resume; unplugging a device mid-call; long silences on the playback device; killing the app mid-recording, then recovering.
@@ -359,6 +376,10 @@ Work through these in order. Stop at the end of each one and show the results be
 
 - **Speaker errors.** Diarization sometimes splits one person into two speakers, merges two similar voices, or pins a short interjection on the wrong person. The speaker-count option and the clustering threshold are the fixes; the README explains both.
 - **Diarization can't be cancelled in-process.** sherpa-onnx ignores the progress callback's return value. This is why jobs run in a worker.
+- **A diarizer that fails to load crashes on first use.** sherpa-onnx returns a null handle, which its C# wrapper doesn't check. Talktrace checks it (section 3); re-check after any sherpa-onnx upgrade, since the check reads a private field.
+- **The int8 segmentation model misses speech.** On the test recording it found no speaker for a third of the words. Use the full-precision `model.onnx`.
+- **sherpa-onnx's clustering over-splits and wastes fixed counts.** Complete linkage with no minimum cluster size turns stray embeddings into near-empty speakers. Talktrace merges by voice afterwards (section 7, step 4). Each extra group also costs memory: 61 groups pushed a 49-minute job to a 3.4 GB peak.
+- **Very quiet participants.** Someone with less than about 15 s of speech is folded into the closest voice on Auto. Choosing the speaker count keeps them as a separate speaker when their voice is distinct.
 - **Parakeet model type.** Configure it as a NeMo transducer, or let sherpa-onnx detect the type from the metadata.
 - **Benchmark on a quiet machine.** Stage timings varied up to 3× when other heavy work (a build, a test run) ran at the same time.
 - **Model paths must be plain ASCII.** sherpa-onnx's C# wrapper passes paths as ANSI strings, so a model folder under a user name with accented characters may not open. Talktrace checks and says so; `TALKTRACE_MODELS_DIR` can point somewhere else.
@@ -405,7 +426,9 @@ The business decisions for a Store release (name clearance, pricing, account typ
 
 ## 19. Open items
 
-1. **Long single-speaker turns (decide in Milestone 3).** With speaker labels on, each turn is one paragraph however long, so a long monologue becomes a wall of text. A length-based split (a new paragraph at the first sentence end after about 100 words) was tried with labels off in Milestone 2 and rejected because it cut paragraphs off mid-thought. In Milestone 3, look at real turn lengths on the test recording, then put the options to the user (for example: leave turns whole, or split only at long pauses within a turn) rather than choosing one.
+(Open item 1, long single-speaker turns, was settled in Milestone 3: turns stay whole. See section 3.)
+
+2. **Peak memory on long recordings.** The 98-minute file peaked at 2.59 GB, about 90 MB over the target (section 12); about 2.47 GB is expected at 90 minutes. Speaker identification alone peaks at 1.83 GB, so find which later stage sets the peak before trying to reduce it. The user chose to leave this for later after Milestone 3.
 
 ## 20. References
 

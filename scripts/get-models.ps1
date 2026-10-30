@@ -64,7 +64,7 @@ $models = @(
         Profiles = @('Fast', 'Multilingual')
         Url      = "$base/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
         Sha256   = '24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488'
-        Present  = 'sherpa-onnx-pyannote-segmentation-3-0\model.int8.onnx'
+        Present  = 'sherpa-onnx-pyannote-segmentation-3-0\model.onnx'
     }
     @{
         Name     = 'TitaNet small speaker embeddings'

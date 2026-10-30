@@ -1,4 +1,5 @@
 using Talktrace.Core.Asr;
+using Talktrace.Core.Speakers;
 using Talktrace.Core.Transcripts;
 
 namespace Talktrace.Tests;
@@ -39,5 +40,49 @@ public class TurnBuilderTests
     public void Returns_no_paragraphs_for_no_words()
     {
         Assert.Empty(TurnBuilder.Paragraphs([], pauseSeconds: 2));
+    }
+
+    private static SpeakerWord W(string text, double start, double end, int speaker) => new(new Word(text, start, end), speaker);
+
+    [Fact]
+    public void Consecutive_words_from_one_speaker_form_one_turn()
+    {
+        SpeakerWord[] words = [W("Okay,", 0, 0.5, 4), W("thanks.", 0.6, 1.0, 4), W("Sure.", 1.2, 1.5, 7), W("Right.", 1.7, 2.0, 4)];
+
+        IReadOnlyList<Turn> turns = TurnBuilder.Turns(words);
+
+        Assert.Equal(
+            [new Turn(1, 0, 1.0, "Okay, thanks."), new Turn(2, 1.2, 1.5, "Sure."), new Turn(1, 1.7, 2.0, "Right.")],
+            turns);
+    }
+
+    [Fact]
+    public void Numbers_speakers_in_order_of_first_appearance()
+    {
+        SpeakerWord[] words = [W("a", 0, 0.2, 2), W("b", 0.3, 0.5, 0), W("c", 0.6, 0.8, 1), W("d", 0.9, 1.0, 0)];
+
+        Assert.Equal([1, 2, 3, 2], TurnBuilder.Turns(words).Select(t => t.Speaker));
+    }
+
+    [Fact]
+    public void Keeps_one_speakers_turn_whole_however_long()
+    {
+        SpeakerWord[] words = Enumerable.Range(0, 500).Select(i => W("word.", i * 0.4, i * 0.4 + 0.3, 0)).ToArray();
+
+        Assert.Single(TurnBuilder.Turns(words));
+    }
+
+    [Fact]
+    public void Drops_empty_words_without_splitting_a_turn()
+    {
+        SpeakerWord[] words = [W("one", 0, 0.2, 0), W(" ", 0.3, 0.4, 1), W("two", 0.5, 0.7, 0)];
+
+        Assert.Equal(new Turn(1, 0, 0.7, "one two"), Assert.Single(TurnBuilder.Turns(words)));
+    }
+
+    [Fact]
+    public void Returns_no_turns_for_no_words()
+    {
+        Assert.Empty(TurnBuilder.Turns([]));
     }
 }

@@ -15,17 +15,24 @@ public static class TranscriptFormatter
         text.Append("Transcribed: ").Append(result.TranscribedAt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
             .Append(" · Duration: ").Append(FormatDuration(result.Duration))
             .Append(" · Model: ").Append(result.ModelName).Append(NewLine);
+        if (result.SpeakerLabels && result.Speakers.Count > 0)
+            text.Append("Speakers: ").AppendJoin(", ", result.Speakers.Select(SpeakerName)).Append(NewLine);
 
         foreach (Turn turn in result.Turns)
         {
             text.Append(NewLine);
             if (includeTimestamps)
                 text.Append('[').Append(FormatTimestamp(turn.Start)).Append("] ");
+            if (turn.Speaker is int speaker)
+                text.Append(SpeakerName(speaker)).Append(": ");
             text.Append(turn.Text).Append(NewLine);
         }
 
         return text.ToString();
     }
+
+    /// <summary>Speaker 1, Speaker 2 and so on.</summary>
+    public static string SpeakerName(int speaker) => $"Speaker {speaker}";
 
     /// <summary>52:14, or 1:02:14 for an hour or more.</summary>
     public static string FormatDuration(TimeSpan duration)

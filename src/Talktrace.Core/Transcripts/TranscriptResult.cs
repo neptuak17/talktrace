@@ -17,6 +17,9 @@ public sealed record TranscriptResult(
     int ChunkCount,
     string SavedPath)
 {
+    /// <summary>Speaker numbers in order of first appearance; empty with speaker labels off.</summary>
+    public IReadOnlyList<int> Speakers => Turns.Where(t => t.Speaker is not null).Select(t => t.Speaker!.Value).Distinct().ToList();
+
     public TimeSpan TotalElapsed => Timings.Aggregate(TimeSpan.Zero, (sum, t) => sum + t.Elapsed);
 
     /// <summary>Processing time divided by audio duration; below 1 is faster than real time.</summary>

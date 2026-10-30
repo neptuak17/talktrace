@@ -4,7 +4,7 @@ A native Windows on ARM64 desktop app that turns meeting recordings into speaker
 
 **[DESIGN.md](DESIGN.md) is the source of truth.** Read it before changing anything, and update it when a decision changes. Work milestone by milestone (DESIGN.md section 14) and stop at the end of each one for review.
 
-Progress: Milestones 1 (scaffold) and 2 (transcription without speakers) done and reviewed. Next: Milestone 3 (speaker labels).
+Progress: Milestones 1 (scaffold), 2 (transcription without speakers) and 3 (speaker labels) done and reviewed. Next: Milestone 4 (the app).
 
 ## Working agreement
 
@@ -16,17 +16,17 @@ Progress: Milestones 1 (scaffold) and 2 (transcription without speakers) done an
 
 ## Test data
 
-- `testdata\test_recording.m4a` is the user's real meeting: 49:09, AAC at 48 kHz stereo, probably three speakers (the user's earlier test fixed the count at 3). It's confidential and local only.
+- `testdata\test_recording.m4a` is the user's real meeting: 49:09, AAC at 48 kHz stereo, five speakers (the user and four others, confirmed by the user; the earlier sherpa-onnx test's count of 3 was a guess). It's confidential and local only.
 - Check output only by counts (paragraphs, words, speakers, timestamps). Never read, quote, print or log transcript text; the user judges accuracy.
-- Baselines: Milestone 2 (labels off) took 110 s in total (real-time factor 0.037) with a 1.86 GB peak. The user's earlier sherpa-onnx test of speaker identification (3 clusters, TitaNet small, 6 threads) took about 3× as long as transcription.
-- Run timing jobs (full transcriptions, `--benchmark`) with nothing else running; a concurrent build or test run skewed timings up to 3×.
+- Baselines: Milestone 2 (labels off) took 110 s in total (real-time factor 0.037) with a 1.86 GB peak. Milestone 3 (labels on, Auto) took 360 s (0.122) with a 1.88 GB peak and found 4 speakers; the 98-minute joined file (`testdata\test_recording x2.wav`) took 722 s with a 2.59 GB peak.
+- Run timing jobs (full transcriptions, `--benchmark`) with nothing else running and the laptop on mains power; a concurrent build or test run skewed timings up to 3×, and battery power about 2×.
+- Speaker identification takes 4–9 minutes per run. To compare speaker settings, save the diarization segments and word times once (numbers only, outside the repo) and re-run the merge and assignment on them, rather than re-running the whole job.
 
-## Starting Milestone 3
+## Speaker labels (Milestone 3)
 
-Read DESIGN.md sections 7 (steps 4, 6 and 7), 8, 14 (Milestone 3) and 19 (open item 1). Then:
-- Check the sherpa-onnx C# diarization API (`OfflineSpeakerDiarization*.cs`, `FastClusteringConfig.cs` in `scripts/dotnet` at tag v2.0.1) before writing the wrapper. A fixed count sets the number of clusters; Auto uses the threshold.
-- `TranscribeOptions.Speakers` already exists. `Transcriber` throws `NotSupportedException` for labels, and the CLI accepts only `--speakers none`; both change in Milestone 3.
-- `TurnBuilder.Paragraphs` is the labels-off path. Labels-on turns come from assigning speakers to words (step 6), then grouping (step 7).
+- Speakers are found in two stages (DESIGN.md section 7, step 4): `SpeakerDiarizer.Diarize` runs sherpa-onnx set to over-split, and `SpeakerMerger` merges the groups by voice using TitaNet voice prints. A chosen count is applied by the merge, never by sherpa-onnx's own cluster count.
+- Speaker segmentation uses pyannote's full-precision `model.onnx`; the int8 model missed a third of the speech.
+- With labels on, turns stay whole however long (the user's decision; DESIGN.md section 3).
 
 ## Hard constraints
 

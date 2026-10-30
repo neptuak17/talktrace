@@ -3,6 +3,7 @@ using Talktrace.Core.Asr;
 using Talktrace.Core.Audio;
 using Talktrace.Core.Models;
 using Talktrace.Core.Pipeline;
+using Talktrace.Core.Speakers;
 using Talktrace.Core.Transcripts;
 
 namespace Talktrace.Core;
@@ -19,11 +20,13 @@ public static class Transcriber
     private static TranscriptResult Transcribe(
         string path, TranscribeOptions options, IProgress<TranscribeProgress>? progress, CancellationToken cancellationToken)
     {
-        if (options.Speakers.Label)
-            throw new NotSupportedException("Speaker labels aren't implemented yet.");
+        // With one speaker there is nobody to tell apart, so every word goes to Speaker 1.
+        bool identifySpeakers = options.Speakers.Label && options.Speakers.Count != 1;
 
         string asrDirectory = RequireModel(options.Profile.AsrDirectory, options.Profile);
         string vadModel = RequireModel(VadModelFile, options.Profile);
+        string? segmentationModel = identifySpeakers ? RequireModel(SpeakerDiarizer.SegmentationModelFile, options.Profile) : null;
+        string? embeddingModel = identifySpeakers ? RequireModel(SpeakerDiarizer.EmbeddingModelFile, options.Profile) : null;
         var timings = new List<StageTiming>();
         var clock = Stopwatch.StartNew();
 
@@ -44,9 +47,21 @@ public static class Transcriber
         IReadOnlyList<TimeRange> chunks = Chunker.Build(speech, audio.Samples, audio.SampleRate, options);
         EndStage(TranscribeStage.FindingSpeech);
 
+        IReadOnlyList<SpeakerSegment> segments = [];
+        if (identifySpeakers)
+        {
+            Report(TranscribeStage.IdentifyingSpeakers, 0, 1);
+            segments = SpeakerDiarizer.FindSpeakers(
+                audio, segmentationModel!, embeddingModel!, options,
+                (done, total) => Report(TranscribeStage.IdentifyingSpeakers, done, total), cancellationToken);
+            EndStage(TranscribeStage.IdentifyingSpeakers);
+        }
+
         Report(TranscribeStage.Transcribing, 0, chunks.Count);
         IReadOnlyList<Word> words = TranscribeChunks(audio, chunks, asrDirectory, options, Report, cancellationToken);
-        IReadOnlyList<Turn> turns = TurnBuilder.Paragraphs(words, options.ParagraphPauseSeconds);
+        IReadOnlyList<Turn> turns = options.Speakers.Label
+            ? TurnBuilder.Turns(AssignSpeakers(words, segments, options))
+            : TurnBuilder.Paragraphs(words, options.ParagraphPauseSeconds);
         EndStage(TranscribeStage.Transcribing);
 
         Report(TranscribeStage.Saving, 0, 1);
@@ -55,7 +70,7 @@ public static class Transcriber
             TranscribedAt: DateTime.Now,
             Duration: TimeSpan.FromSeconds(audio.DurationSeconds),
             ModelName: options.Profile.DisplayName,
-            SpeakerLabels: false,
+            SpeakerLabels: options.Speakers.Label,
             Turns: turns,
             Timings: timings,
             ChunkCount: chunks.Count,
@@ -105,6 +120,14 @@ public static class Transcriber
 
         return words;
     }
+
+    /// <summary>Step 6 of the pipeline: a speaker for each word, then smoothing of short slips.</summary>
+    internal static IReadOnlyList<SpeakerWord> AssignSpeakers(
+        IReadOnlyList<Word> words, IReadOnlyList<SpeakerSegment> segments, TranscribeOptions options) =>
+        SpeakerAssigner.Smooth(
+            SpeakerAssigner.Assign(words, segments, options.SpeakerReachSeconds),
+            options.ShortRunSeconds,
+            options.ShortRunPauseSeconds);
 
     internal static AudioSlice Slice(AudioClip audio, TimeRange range)
     {
