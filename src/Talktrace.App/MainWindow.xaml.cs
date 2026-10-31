@@ -1,7 +1,11 @@
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Threading;
 using Microsoft.Win32;
+using Talktrace.Core.Settings;
 
 namespace Talktrace.App;
 
@@ -13,8 +17,10 @@ public partial class MainWindow : Window, IDialogs
     public MainWindow()
     {
         InitializeComponent();
-        _viewModel = new MainViewModel(this);
+        _viewModel = new MainViewModel(this, SettingsFile.DefaultPath);
+        _viewModel.TranscriptRewriting += KeepTranscriptPosition;
         DataContext = _viewModel;
+        RestorePlacement(_viewModel.SavedWindowPlacement);
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -32,6 +38,66 @@ public partial class MainWindow : Window, IDialogs
             _closeConfirmed = true;
             Close();
         });
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        Rect bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+        if (!bounds.IsEmpty)
+            _viewModel.SaveWindowPlacement(new WindowPlacement(bounds.Left, bounds.Top, bounds.Width, bounds.Height, WindowState == WindowState.Maximized));
+        _viewModel.Dispose();
+        base.OnClosed(e);
+    }
+
+    /// <summary>Puts the window back where it was, if that's still on a screen.</summary>
+    private void RestorePlacement(WindowPlacement? placement)
+    {
+        if (placement is null)
+            return;
+        var screen = new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+        var bounds = new Rect(placement.Left, placement.Top, Math.Max(placement.Width, MinWidth), Math.Max(placement.Height, MinHeight));
+        Rect visible = Rect.Intersect(screen, bounds);
+        if (visible.IsEmpty || visible.Width < 200 || visible.Height < 100)
+            return; // the screen it was on has gone
+
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = bounds.Left;
+        Top = bounds.Top;
+        Width = bounds.Width;
+        Height = bounds.Height;
+        if (placement.Maximized)
+            WindowState = WindowState.Maximized;
+    }
+
+    /// <summary>A rename replaces the whole text, which would jump the transcript to the top; this keeps the reader's place.</summary>
+    private void KeepTranscriptPosition()
+    {
+        double offset = Transcript.VerticalOffset;
+        int caret = Transcript.CaretIndex;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            Transcript.CaretIndex = Math.Min(caret, Transcript.Text.Length);
+            Transcript.ScrollToVerticalOffset(offset);
+        });
+    }
+
+    // A speaker's name applies on Enter or when the box loses focus; Esc puts back the name in use.
+    private void OnSpeakerNameKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox box)
+            return;
+        if (e.Key == Key.Enter)
+        {
+            box.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            box.SelectAll();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            box.GetBindingExpression(TextBox.TextProperty)?.UpdateTarget();
+            e.Handled = true;
+        }
     }
 
     // Recordings dropped anywhere on the window, including on the transcript box, which would otherwise take them as text.
@@ -76,8 +142,10 @@ public partial class MainWindow : Window, IDialogs
         return dialog.ShowDialog(this) == true ? dialog.FileName : null;
     }
 
-    public SaveChoice AskToSaveEdits(string fileName) =>
-        PromptWindow.Ask(this, "Save your changes to the transcript?", $"Your edits to {fileName} haven't been saved.",
+    public SaveChoice AskToSaveEdits(string? fileName) =>
+        PromptWindow.Ask(this,
+                fileName is null ? "Save the transcript?" : "Save your changes to the transcript?",
+                fileName is null ? "This transcript hasn't been saved yet." : $"Your edits to {fileName} haven't been saved.",
                 "Save", "Don't save", "Cancel") switch
         {
             0 => SaveChoice.Save,

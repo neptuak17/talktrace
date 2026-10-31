@@ -7,7 +7,8 @@ public readonly record struct StageTiming(TranscribeStage Stage, TimeSpan Elapse
 
 /// <summary>A finished transcription.</summary>
 /// <param name="SourceFileName">The recording's file name, without its folder.</param>
-/// <param name="SavedPath">Where the transcript was auto-saved.</param>
+/// <param name="SavedPath">Where the transcript was auto-saved, or null if saving failed.</param>
+/// <param name="SaveError">Why saving failed, in plain language; null once saved.</param>
 public sealed record TranscriptResult(
     string SourceFileName,
     DateTime TranscribedAt,
@@ -17,7 +18,8 @@ public sealed record TranscriptResult(
     IReadOnlyList<Turn> Turns,
     IReadOnlyList<StageTiming> Timings,
     int ChunkCount,
-    string SavedPath)
+    string? SavedPath,
+    string? SaveError = null)
 {
     /// <summary>Speaker numbers in order of first appearance; empty with speaker labels off.</summary>
     [JsonIgnore]

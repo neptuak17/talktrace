@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Globalization;
 using Talktrace.Core.Asr;
 using Talktrace.Core.Audio;
+using Talktrace.Core.Logging;
 using Talktrace.Core.Models;
 using Talktrace.Core.Pipeline;
 using Talktrace.Core.Speakers;
@@ -21,6 +23,8 @@ public static class Transcriber
         string path, TranscribeOptions options, IProgress<TranscribeProgress>? progress, CancellationToken cancellationToken)
     {
         bool identifySpeakers = IdentifiesSpeakers(options);
+        Log.Redact(path);
+        LogStarted(path, options);
 
         string asrDirectory = RequireModel(options.Profile.AsrDirectory, options.Profile);
         string vadModel = RequireModel(VadModelFile, options.Profile);
@@ -73,22 +77,67 @@ public static class Transcriber
             Turns: turns,
             Timings: timings,
             ChunkCount: chunks.Count,
-            SavedPath: "");
-        string text = TranscriptFormatter.Format(result, options.IncludeTimestamps);
-        string savedPath;
-        if (options.OutputPath is null)
-        {
-            savedPath = TranscriptFile.SaveNew(TranscriptFile.DefaultPath(path), text);
-        }
-        else
-        {
-            TranscriptFile.Overwrite(options.OutputPath, text);
-            savedPath = Path.GetFullPath(options.OutputPath);
-        }
+            SavedPath: null);
+        result = Save(result, path, options);
         EndStage(TranscribeStage.Saving);
         Report(TranscribeStage.Saving, 1, 1);
 
-        return result with { SavedPath = savedPath, Timings = timings };
+        result = result with { Timings = timings };
+        LogFinished(result, options);
+        return result;
+    }
+
+    /// <summary>
+    /// Saves next to the recording, never overwriting, or where <see cref="TranscribeOptions.OutputPath"/> says.
+    /// A failed save still returns the transcript, with the reason, so the job isn't lost (DESIGN.md section 10).
+    /// </summary>
+    private static TranscriptResult Save(TranscriptResult result, string recordingPath, TranscribeOptions options)
+    {
+        string target = options.OutputPath ?? TranscriptFile.DefaultPath(recordingPath);
+        Log.Redact(target);
+        string text = TranscriptFormatter.Format(result, options.IncludeTimestamps);
+        try
+        {
+            if (options.OutputPath is null)
+                return result with { SavedPath = TranscriptFile.SaveNew(target, text) };
+            TranscriptFile.Overwrite(target, text);
+            return result with { SavedPath = Path.GetFullPath(target) };
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            Log.Warning("The transcript couldn't be saved.", e);
+            return result with { SaveError = FileErrors.Saving(e, Path.GetFileName(target)) };
+        }
+    }
+
+    private static void LogStarted(string path, TranscribeOptions options)
+    {
+        var file = new FileInfo(path);
+        string type = string.IsNullOrEmpty(file.Extension) ? "no extension" : file.Extension.TrimStart('.').ToUpperInvariant();
+        string size = file.Exists ? $"{file.Length / (1024.0 * 1024):0.0} MB" : "missing";
+        string speakers = options.Speakers switch
+        {
+            { Label: false } => "none",
+            { Count: int n } => n.ToString(CultureInfo.InvariantCulture),
+            _ => "auto",
+        };
+        Log.Info(string.Create(CultureInfo.InvariantCulture,
+            $"Job started: {type} file, {size}; model {options.Profile.Id}; speakers {speakers}; threads {options.NumThreads}; " +
+            $"threshold {options.ClusteringThreshold}; longest segment {options.VadMaxSpeechSeconds} s; longest chunk {options.MaxChunkSeconds} s; " +
+            $"timestamps {(options.IncludeTimestamps ? "on" : "off")}."));
+    }
+
+    private static void LogFinished(TranscriptResult result, TranscribeOptions options)
+    {
+        string stages = string.Join(", ", result.Timings.Select(t => string.Create(CultureInfo.InvariantCulture, $"{t.Stage} {t.Elapsed.TotalSeconds:0.0} s")));
+        string found = result.SpeakerLabels
+            ? $"{result.Speakers.Count} speakers, {result.Turns.Count} turns"
+            : $"{result.Turns.Count} paragraphs";
+        long peakMb = Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024);
+        Log.Info(string.Create(CultureInfo.InvariantCulture,
+            $"Job done: audio {TranscriptFormatter.FormatDuration(result.Duration)}; {result.ChunkCount} chunks; {found}; {stages}; " +
+            $"total {result.TotalElapsed.TotalSeconds:0.0} s, real-time factor {result.RealTimeFactor:0.000}; threads {options.NumThreads}; " +
+            $"peak memory {peakMb} MB; {(result.SavedPath is null ? "not saved" : "saved")}."));
     }
 
     /// <summary>

@@ -4,7 +4,7 @@ A native Windows on ARM64 desktop app that turns meeting recordings into speaker
 
 **[DESIGN.md](DESIGN.md) is the source of truth.** Read it before changing anything, and update it when a decision changes. Work milestone by milestone (DESIGN.md section 14) and stop at the end of each one for review.
 
-Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speaker labels) and 4 (the app) done and reviewed. Next: Milestone 5 (polish).
+Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speaker labels), 4 (the app) and 5 (polish) done and reviewed; the Multilingual profile was dropped from v1. Next: Milestone 6 (package).
 
 ## Working agreement
 
@@ -33,12 +33,20 @@ Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speake
 - The app runs every job through Core's `WorkerClient`, which starts `Talktrace.Cli.exe --worker` from the app's own folder. The app's project reference to the CLI puts the exe there in builds; the tests reference it the same way for the worker tests.
 - WPF with `ThemeMode="System"` (the Fluent theme, still experimental: WPF0001 is suppressed in the app's project). WPF projects' implicit usings leave out `System.IO`.
 - `ProgressBar.Value` (any `RangeBase`) binds two-way by default; bind it to a read-only view-model property with `Mode=OneWay`, or the window crashes on load.
-- To check the app on a real recording without reading the transcript, drive it with UI Automation from PowerShell and read only TextBlocks (stage, status, errors); the transcript is a TextBox. Never screenshot the window while a real recording's transcript is on screen. Screenshots of the window: `PrintWindow` with flag 2 after `SetProcessDPIAware`.
-  - The TextBlocks include button labels, so match stage text exactly ("Cancelled", not "Cancel").
+- To check the app on a real recording without reading the transcript, drive it with UI Automation from PowerShell and read only these elements, by automation ID: `StageText`, `TimeText`, `StatusText`, `ErrorMessage`, `ModelsMessage`, `SpeakerLabel` and `SpeakerNameError`. Never read `SpeakerSample` (each speaker's sample sentence is transcript text) or the `Transcript` box; count in the script and print only numbers. Never screenshot the window while a real recording's transcript is on screen, and never press a play button on a real recording (it plays the meeting aloud). Screenshots of the window: `PrintWindow` with flag 2 after `SetProcessDPIAware`. A public test file with two voices: the sherpa-onnx sample joined to a slowed copy of itself, transcribed with `--speakers 2`.
+  - Match stage text exactly ("Cancelled", not "Cancel").
+  - The window is found as soon as it has a title, before its content loads; wait for the Transcribe button.
+  - A WPF `ToggleButton` breaks a one-way `IsChecked` binding when clicked, so the play buttons are plain buttons whose name and icon follow the state ("Play a sample of Speaker 1", "Stop the sample of Speaker 1").
   - Invoking a WPF button through UI Automation returns before its click runs, so a dialog it opens appears a moment later; wait for it.
   - The file dialogs' controls show as panes, without patterns. Open dialog: `WM_SETTEXT` the file name into the last control with id 1148, then click Open (id 1). Save dialog: the file name box is the id 1001 control whose name is the current file name (another 1001 is the address bar).
   - Click dialog buttons with `PostMessage(BM_CLICK)`, not `SendMessage`: if the click opens another modal (such as "replace the file?"), `SendMessage` blocks until it closes.
 - The Fluent theme draws an indeterminate progress bar as a moving dash with no track, so a screenshot can miss it.
+
+## Polish (Milestone 5)
+
+- The log (`Talktrace.Core.Logging.Log`) is shared by the app, the worker and the CLI; nothing is written until a process calls `Log.Start`. `TALKTRACE_LOG_DIR` points it somewhere else; set it when running the app or CLI during development so the log is readable, and `LogTests` checks a real job's log for transcript words. `Log.Redact` keeps a path's folder and name out of every line: call it for each recording and transcript path before anything that might log it.
+- Settings live in `%LOCALAPPDATA%\Talktrace\settings.json` (`SettingsFile`), which Claude's runs write to the virtualised copy, not the user's.
+- NAudio 3.3 marks `WasapiOut` obsolete; play audio with `WasapiPlayerBuilder().WithSharedMode().Build()`.
 
 ## Hard constraints
 

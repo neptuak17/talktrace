@@ -16,7 +16,8 @@ public interface IDialogs
     /// <returns>The chosen path, or null if cancelled.</returns>
     string? ChooseSavePath(string suggestedPath);
 
-    SaveChoice AskToSaveEdits(string fileName);
+    /// <param name="fileName">The file the transcript was last saved as, or null if it hasn't been saved.</param>
+    SaveChoice AskToSaveEdits(string? fileName);
 
     /// <returns>True to stop the running job and close.</returns>
     bool ConfirmStopAndClose();

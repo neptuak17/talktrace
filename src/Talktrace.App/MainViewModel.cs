@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -6,9 +7,12 @@ using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using NAudio.MediaFoundation;
 using Talktrace.Core;
 using Talktrace.Core.Audio;
+using Talktrace.Core.Logging;
 using Talktrace.Core.Models;
+using Talktrace.Core.Settings;
 using Talktrace.Core.Transcripts;
 using Talktrace.Core.Worker;
 
@@ -18,13 +22,19 @@ namespace Talktrace.App;
 /// The Transcribe a file screen (DESIGN.md section 10). One recording and one job at a time; the job runs in the
 /// worker process, which auto-saves the transcript before it reports the result.
 /// </summary>
-public sealed partial class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     private static readonly TranscribeOptions Defaults = new();
 
+    /// <summary>The longest sample the speakers panel plays.</summary>
+    private const double SampleSeconds = 8;
+
     private readonly IDialogs _dialogs;
+    private readonly string _settingsPath;
     private readonly DispatcherTimer _clockTimer;
     private readonly Stopwatch _jobClock = new();
+    private readonly SamplePlayer _player = new();
+    private UserSettings _settings;
     private CancellationTokenSource? _jobCancel;
     private TranscribeProgress? _progress;
     private (TimeSpan At, int Done)? _firstChunk;
@@ -33,12 +43,15 @@ public sealed partial class MainViewModel : ObservableObject
     private string? _errorDetails;
     private bool _settingTranscript;
     private int _openRequests;
+    private SpeakerRow? _playingRow;
 
-    public MainViewModel(IDialogs dialogs)
+    public MainViewModel(IDialogs dialogs, string settingsPath)
     {
         _dialogs = dialogs;
+        _settingsPath = settingsPath;
         _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clockTimer.Tick += (_, _) => UpdateTimeText();
+        _player.Finished += OnSampleFinished;
 
         SpeakerChoices =
         [
@@ -46,10 +59,14 @@ public sealed partial class MainViewModel : ObservableObject
             new("Auto-detect", SpeakerSetting.Auto),
             .. Enumerable.Range(2, 7).Select(n => new SpeakerChoice(n.ToString(CultureInfo.CurrentCulture), SpeakerSetting.Exactly(n))),
         ];
-        Profiles = ModelProfile.All.Select(p => new ProfileChoice(p, ModelLocator.Find(p.AsrDirectory) is not null)).ToList();
+        // Multilingual was dropped from v1 (DESIGN.md section 3); the Model dropdown shows once there are two profiles.
+        Profiles = new[] { ModelProfile.Fast }.Select(p => new ProfileChoice(p, ModelLocator.Find(p.AsrDirectory) is not null)).ToList();
         SelectedProfile = Profiles.FirstOrDefault(p => p.IsInstalled) ?? Profiles[0];
         SelectedSpeakers = SpeakerChoices[1];
         ResetAdvanced();
+
+        _settings = SettingsFile.Load(settingsPath);
+        ApplySettings(_settings);
 
         RecordingTitle = "Drop a recording here";
         RecordingDetails = "or choose one: WAV, MP3, M4A, MP4 or WMA";
@@ -58,6 +75,12 @@ public sealed partial class MainViewModel : ObservableObject
         TranscriptText = "";
         StatusText = "";
     }
+
+    /// <summary>Raised just before a rename rewrites the transcript, so the view can keep its scroll position.</summary>
+    public event Action? TranscriptRewriting;
+
+    /// <summary>Where the window was when Talktrace last closed, or null.</summary>
+    public WindowPlacement? SavedWindowPlacement => _settings.Window;
 
     // The recording
 
@@ -76,6 +99,9 @@ public sealed partial class MainViewModel : ObservableObject
     public IReadOnlyList<SpeakerChoice> SpeakerChoices { get; }
 
     public IReadOnlyList<ProfileChoice> Profiles { get; }
+
+    /// <summary>One choice is no choice: the Model dropdown is hidden until there are two profiles.</summary>
+    public bool ShowModelChoice => Profiles.Count > 1;
 
     [ObservableProperty]
     public partial SpeakerChoice SelectedSpeakers { get; set; }
@@ -157,6 +183,14 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string StatusText { get; private set; }
 
+    // The speakers panel
+
+    /// <summary>One row per speaker in order of first appearance; empty when the transcript has no speaker labels.</summary>
+    public ObservableCollection<SpeakerRow> Speakers { get; } = [];
+
+    [ObservableProperty]
+    public partial bool HasSpeakers { get; private set; }
+
     // Errors
 
     [ObservableProperty]
@@ -197,16 +231,18 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         int request = ++_openRequests;
         ClearError();
+        Log.Redact(path);
         try
         {
             TimeSpan duration = await Task.Run(() => AudioDecoder.ReadDuration(path));
             if (request != _openRequests || IsRunning)
                 return; // replaced by a later choice
             string fullPath = Path.GetFullPath(path);
+            long size = new FileInfo(fullPath).Length;
             RecordingPath = fullPath;
             RecordingTitle = Path.GetFileName(fullPath);
-            RecordingDetails = $"{TranscriptFormatter.FormatDuration(duration)} · {FormatSize(new FileInfo(fullPath).Length)} · " +
-                               Path.GetDirectoryName(fullPath);
+            RecordingDetails = $"{TranscriptFormatter.FormatDuration(duration)} · {FormatSize(size)} · " + Path.GetDirectoryName(fullPath);
+            Log.Info($"Recording chosen: {DescribeType(fullPath)} file, {FormatSize(size)}, {TranscriptFormatter.FormatDuration(duration)}.");
         }
         catch (Exception e) when (e is TalktraceException or IOException or UnauthorizedAccessException)
         {
@@ -229,10 +265,13 @@ public sealed partial class MainViewModel : ObservableObject
         ModelsMessage = MissingModelsMessage(options);
         if (ModelsMessage is not null)
             return;
+        SaveOptions(options);
 
         using var cancel = new CancellationTokenSource();
         _jobCancel = cancel;
+        StopSample();
         ShowTranscript(null);
+        ShowSpeakers(null);
         SavedPath = null;
         StatusText = "";
         _progress = null;
@@ -251,13 +290,26 @@ public sealed partial class MainViewModel : ObservableObject
                 recording, options, new Progress<TranscribeProgress>(OnProgress), cancel.Token);
             _transcribedRecording = recording;
             ShowTranscript(TranscriptFormatter.Format(result, options.IncludeTimestamps));
+            ShowSpeakers(result);
             SavedPath = result.SavedPath;
-            StatusText = $"Saved as {Path.GetFileName(result.SavedPath)}";
             StageText = $"Done in {TranscriptFormatter.FormatDuration(_jobClock.Elapsed)}";
+            Log.Info($"Transcription done in {TranscriptFormatter.FormatDuration(_jobClock.Elapsed)}.");
+            if (result.SavedPath is string saved)
+            {
+                StatusText = $"Saved as {Path.GetFileName(saved)}";
+            }
+            else
+            {
+                // The transcript exists only on screen, so leaving it asks first, as unsaved edits do.
+                HasUnsavedEdits = true;
+                StatusText = "Not saved";
+                ShowError($"{result.SaveError} The transcript hasn't been saved: use Save as… to save it somewhere else.", null);
+            }
         }
         catch (OperationCanceledException)
         {
             StageText = "Cancelled";
+            Log.Info("Transcription cancelled.");
         }
         catch (WorkerException e)
         {
@@ -289,20 +341,22 @@ public sealed partial class MainViewModel : ObservableObject
         _jobCancel.Cancel();
     }
 
-    private bool CanSave => HasTranscript && !IsRunning && SavedPath is not null;
-
-    /// <summary>Saves edits over the file last saved, at first the auto-saved transcript.</summary>
-    [RelayCommand(CanExecute = nameof(CanSave))]
-    private void Save() => WriteTranscript(SavedPath!);
-
     private bool CanUseTranscript => HasTranscript && !IsRunning;
 
+    /// <summary>
+    /// Saves edits over the file last saved, at first the auto-saved transcript. A transcript the worker couldn't save
+    /// goes through Save as instead.
+    /// </summary>
     [RelayCommand(CanExecute = nameof(CanUseTranscript))]
-    private void SaveAs()
-    {
-        if (_dialogs.ChooseSavePath(TranscriptFile.DefaultPath(_transcribedRecording!)) is string path)
-            WriteTranscript(path);
-    }
+    private void Save() => SaveTranscript();
+
+    [RelayCommand(CanExecute = nameof(CanUseTranscript))]
+    private void SaveAs() => SaveTranscriptAs();
+
+    private bool SaveTranscript() => SavedPath is string path ? WriteTranscript(path) : SaveTranscriptAs();
+
+    private bool SaveTranscriptAs() =>
+        _dialogs.ChooseSavePath(TranscriptFile.DefaultPath(_transcribedRecording!)) is string path && WriteTranscript(path);
 
     [RelayCommand(CanExecute = nameof(CanUseTranscript))]
     private void CopyAll()
@@ -317,9 +371,13 @@ public sealed partial class MainViewModel : ObservableObject
     private void OpenFolder() => ShowInExplorer($"/select,\"{SavedPath}\"");
 
     [RelayCommand]
-    private void OpenModelsFolder()
+    private void OpenModelsFolder() => ShowFolder(ModelLocator.UserFolder, "models");
+
+    [RelayCommand]
+    private void OpenLogFolder() => ShowFolder(Log.Folder, "log");
+
+    private void ShowFolder(string folder, string what)
     {
-        string folder = ModelLocator.UserFolder;
         try
         {
             Directory.CreateDirectory(folder);
@@ -327,7 +385,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            ShowError($"Talktrace couldn't open the models folder: {e.Message}", e.ToString());
+            ShowError($"Talktrace couldn't open the {what} folder: {e.Message}", e.ToString());
         }
     }
 
@@ -360,6 +418,127 @@ public sealed partial class MainViewModel : ObservableObject
                 await job;
         }
         return ConfirmDiscardingEdits();
+    }
+
+    /// <summary>Remembers where the window was, for the next launch.</summary>
+    public void SaveWindowPlacement(WindowPlacement placement)
+    {
+        _settings = _settings with { Window = placement };
+        SettingsFile.Save(_settingsPath, _settings);
+    }
+
+    /// <summary>For errors nothing else caught: the details go to the log and Copy details, and the window stays open.</summary>
+    public void ShowUnexpectedError(Exception e) =>
+        ShowError("Something went wrong in Talktrace. If it keeps happening, restart Talktrace.", e.ToString());
+
+    public void Dispose() => _player.Dispose();
+
+    // The speakers panel
+
+    /// <summary>
+    /// Applies a name typed for a speaker: replaces their current name in the transcript and the Speakers line. An empty
+    /// name goes back to Speaker N; a name another speaker has is refused.
+    /// </summary>
+    internal void RenameSpeaker(SpeakerRow row, string typed)
+    {
+        string trimmed = typed.Trim();
+        string name = trimmed.Length == 0 ? row.Label : trimmed;
+        if (name == row.CurrentName)
+        {
+            row.NameError = null;
+            row.ResetNameText();
+            return;
+        }
+        if (SpeakerNames.IsTaken(name, Speakers.Where(r => r != row).Select(r => r.CurrentName)))
+        {
+            row.NameError = "Another speaker already has this name.";
+            row.ResetNameText();
+            return;
+        }
+
+        string oldName = row.CurrentName;
+        row.CurrentName = name;
+        row.NameError = null;
+        row.ResetNameText();
+        TranscriptRewriting?.Invoke();
+        TranscriptText = SpeakerNames.Rename(TranscriptText, oldName, name, Speakers.Select(r => r.CurrentName).ToList());
+    }
+
+    /// <summary>Plays the speaker's sample turn from the recording, or stops it if it's already playing.</summary>
+    internal void ToggleSample(SpeakerRow row)
+    {
+        bool wasPlaying = row.IsPlaying;
+        StopSample();
+        if (wasPlaying || row.SampleTurn is not Turn turn || _transcribedRecording is not string recording)
+            return;
+
+        try
+        {
+            _player.Play(recording, turn.Start, Math.Clamp(turn.End - turn.Start, 1, SampleSeconds));
+            row.IsPlaying = true;
+            _playingRow = row;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or COMException or MediaFoundationException)
+        {
+            ShowError(FileErrors.Reading(e, Path.GetFileName(recording)), e.ToString());
+        }
+    }
+
+    private void StopSample()
+    {
+        _player.Stop();
+        OnSampleFinished();
+    }
+
+    private void OnSampleFinished()
+    {
+        if (_playingRow is not null)
+            _playingRow.IsPlaying = false;
+        _playingRow = null;
+    }
+
+    private void ShowSpeakers(TranscriptResult? result)
+    {
+        Speakers.Clear();
+        if (result is { SpeakerLabels: true })
+        {
+            foreach (int speaker in result.Speakers)
+                Speakers.Add(new SpeakerRow(this, speaker, SpeakerNames.SampleTurn(result.Turns, speaker)));
+        }
+        HasSpeakers = Speakers.Count > 0;
+    }
+
+    // Settings
+
+    private void ApplySettings(UserSettings settings)
+    {
+        if (UserSettings.ParseSpeakers(settings.Speakers) is SpeakerSetting speakers
+            && SpeakerChoices.FirstOrDefault(c => c.Setting == speakers) is SpeakerChoice choice)
+            SelectedSpeakers = choice;
+        IncludeTimestamps = settings.IncludeTimestamps;
+        if (settings.ClusteringThreshold is double threshold)
+            ClusteringThreshold = threshold.ToString(CultureInfo.CurrentCulture);
+        if (settings.Threads is int threads)
+            Threads = Math.Clamp(threads, 1, Environment.ProcessorCount).ToString(CultureInfo.CurrentCulture);
+        if (settings.MaxSpeechSeconds is double segment)
+            MaxSpeechSeconds = segment.ToString(CultureInfo.CurrentCulture);
+        if (settings.MaxChunkSeconds is double chunk)
+            MaxChunkSeconds = chunk.ToString(CultureInfo.CurrentCulture);
+    }
+
+    /// <summary>Remembers the options a transcription started with; they have passed the checks by then.</summary>
+    private void SaveOptions(TranscribeOptions options)
+    {
+        _settings = _settings with
+        {
+            Speakers = UserSettings.ToText(options.Speakers),
+            IncludeTimestamps = options.IncludeTimestamps,
+            ClusteringThreshold = options.ClusteringThreshold,
+            Threads = options.NumThreads,
+            MaxSpeechSeconds = options.VadMaxSpeechSeconds,
+            MaxChunkSeconds = options.MaxChunkSeconds,
+        };
+        SettingsFile.Save(_settingsPath, _settings);
     }
 
     private void OnProgress(TranscribeProgress p)
@@ -479,22 +658,23 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>True if there are no unsaved edits, or they were saved, or the user chose to discard them.</summary>
     private bool ConfirmDiscardingEdits() =>
-        !HasUnsavedEdits || _dialogs.AskToSaveEdits(Path.GetFileName(SavedPath!)) switch
+        !HasUnsavedEdits || _dialogs.AskToSaveEdits(SavedPath is null ? null : Path.GetFileName(SavedPath)) switch
         {
-            SaveChoice.Save => WriteTranscript(SavedPath!),
+            SaveChoice.Save => SaveTranscript(),
             SaveChoice.DontSave => true,
             _ => false,
         };
 
     private bool WriteTranscript(string path)
     {
+        Log.Redact(path);
         try
         {
             TranscriptFile.Overwrite(path, TranscriptText);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            ShowError($"Talktrace couldn't save {Path.GetFileName(path)}: {e.Message}", e.ToString());
+            ShowError(FileErrors.Saving(e, Path.GetFileName(path)), e.ToString());
             return false;
         }
         ClearError();
@@ -529,6 +709,15 @@ public sealed partial class MainViewModel : ObservableObject
         ErrorMessage = message;
         _errorDetails = details;
         HasErrorDetails = details is not null;
+        Log.Warning($"Shown to the user: {message}");
+        if (details is not null)
+            Log.Error("Details of the error shown.", details);
+    }
+
+    private static string DescribeType(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return extension.Length == 0 ? "no-extension" : extension.TrimStart('.').ToUpperInvariant();
     }
 
     private void ClearError()

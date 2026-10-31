@@ -40,7 +40,7 @@ public sealed class WorkerClientTests : IDisposable
             new SyncProgress(p => stages.Add(p.Stage)), TestContext.Current.CancellationToken);
 
         Assert.Equal(Path.Combine(_folder, "sample - transcript.txt"), result.SavedPath);
-        Assert.Equal(TranscriptFormatter.Format(result, includeTimestamps: false), await File.ReadAllTextAsync(result.SavedPath, TestContext.Current.CancellationToken));
+        Assert.Equal(TranscriptFormatter.Format(result, includeTimestamps: false), await File.ReadAllTextAsync(result.SavedPath!, TestContext.Current.CancellationToken));
         Assert.NotEmpty(result.Turns);
         Assert.Equal([TranscribeStage.ReadingAudio, TranscribeStage.FindingSpeech, TranscribeStage.Transcribing, TranscribeStage.Saving], stages.Distinct());
     }

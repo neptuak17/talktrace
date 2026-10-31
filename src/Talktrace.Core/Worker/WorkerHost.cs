@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Talktrace.Core.Logging;
 using Talktrace.Core.Transcripts;
 
 namespace Talktrace.Core.Worker;
@@ -35,15 +36,18 @@ public static class WorkerHost
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
+            Log.Info("Job cancelled.");
             return Cancelled;
         }
         catch (TalktraceException e)
         {
+            Log.Error($"Job failed: {e.Message}", e);
             writer.Write(new WorkerError(e.Message, e.ToString()));
             return Failed;
         }
         catch (Exception e)
         {
+            Log.Error("Job failed with an unexpected error.", e);
             writer.Write(new WorkerError("Transcription failed because of an unexpected error.", e.ToString()));
             return Failed;
         }

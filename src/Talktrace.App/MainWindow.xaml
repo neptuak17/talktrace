@@ -9,7 +9,7 @@
         Title="Talktrace"
         Width="900"
         Height="700"
-        MinWidth="640"
+        MinWidth="800"
         MinHeight="560"
         AllowDrop="True"
         PreviewDragEnter="OnPreviewDragOver"
@@ -54,7 +54,10 @@
                 Command="{Binding OpenModelsFolderCommand}"
                 Content="Open models folder"
                 DockPanel.Dock="Right" />
-        <TextBlock VerticalAlignment="Center" Text="{Binding ModelsMessage}" TextWrapping="Wrap" />
+        <TextBlock VerticalAlignment="Center"
+                   AutomationProperties.AutomationId="ModelsMessage"
+                   Text="{Binding ModelsMessage}"
+                   TextWrapping="Wrap" />
       </DockPanel>
     </Border>
 
@@ -94,7 +97,7 @@
                   ItemsSource="{Binding SpeakerChoices}"
                   SelectedItem="{Binding SelectedSpeakers}" />
       </StackPanel>
-      <StackPanel Margin="0,0,16,8">
+      <StackPanel Margin="0,0,16,8" Visibility="{Binding ShowModelChoice, Converter={StaticResource Visible}}">
         <TextBlock Style="{StaticResource Caption}" Text="Model" />
         <ComboBox Width="200"
                   DisplayMemberPath="Label"
@@ -139,10 +142,15 @@
         <TextBlock Style="{StaticResource Caption}" Text="Longest chunk (s)" />
         <TextBox Width="120" Text="{Binding MaxChunkSeconds, UpdateSourceTrigger=PropertyChanged}" />
       </StackPanel>
-      <Button Margin="0,0,0,8"
+      <Button Margin="0,0,8,8"
               VerticalAlignment="Bottom"
               Command="{Binding ResetAdvancedCommand}"
               Content="Reset" />
+      <Button Margin="0,0,0,8"
+              VerticalAlignment="Bottom"
+              Command="{Binding OpenLogFolderCommand}"
+              Content="Open log folder"
+              ToolTip="The log records what Talktrace did and any errors, never what was said." />
     </WrapPanel>
 
     <!-- 3. Transcribe and 4. Progress -->
@@ -172,8 +180,9 @@
           <TextBlock Margin="16,0,0,0"
                      DockPanel.Dock="Right"
                      Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                     AutomationProperties.AutomationId="TimeText"
                      Text="{Binding TimeText}" />
-          <TextBlock Text="{Binding StageText}" TextTrimming="CharacterEllipsis" />
+          <TextBlock AutomationProperties.AutomationId="StageText" Text="{Binding StageText}" TextTrimming="CharacterEllipsis" />
         </DockPanel>
         <ProgressBar Margin="0,8,0,0"
                      IsIndeterminate="{Binding ProgressIsIndeterminate}"
@@ -191,18 +200,131 @@
             Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}"
             Visibility="{Binding HasError, Converter={StaticResource Visible}}">
       <DockPanel>
+        <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" DockPanel.Dock="Right">
+          <Hyperlink Command="{Binding OpenLogFolderCommand}">Open log folder</Hyperlink>
+        </TextBlock>
         <TextBlock Margin="16,0,0,0"
                    VerticalAlignment="Center"
                    DockPanel.Dock="Right"
                    Visibility="{Binding HasErrorDetails, Converter={StaticResource Visible}}">
           <Hyperlink Command="{Binding CopyErrorDetailsCommand}">Copy details</Hyperlink>
         </TextBlock>
-        <TextBlock VerticalAlignment="Center" Text="{Binding ErrorMessage}" TextWrapping="Wrap" />
+        <TextBlock VerticalAlignment="Center"
+                   AutomationProperties.AutomationId="ErrorMessage"
+                   Text="{Binding ErrorMessage}"
+                   TextWrapping="Wrap" />
       </DockPanel>
     </Border>
 
-    <!-- 5. Transcript -->
+    <!-- 5. Transcript and 6. Speakers panel -->
     <Grid Grid.Row="6" Margin="0,16,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+
+      <Border Grid.Column="1"
+              Width="280"
+              Margin="16,0,0,0"
+              Padding="4,8"
+              BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+              BorderThickness="1"
+              CornerRadius="6"
+              Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+              IsEnabled="{Binding IsIdle}"
+              Visibility="{Binding HasSpeakers, Converter={StaticResource Visible}}">
+        <DockPanel>
+          <TextBlock Margin="12,0,12,8"
+                     DockPanel.Dock="Top"
+                     FontWeight="SemiBold"
+                     Text="Speakers" />
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <ItemsControl AutomationProperties.AutomationId="SpeakersList" ItemsSource="{Binding Speakers}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type local:SpeakerRow}">
+                  <Grid Margin="12,4,12,12">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock AutomationProperties.AutomationId="SpeakerLabel" Style="{StaticResource Caption}" Text="{Binding Label}" />
+                    <Grid Grid.Row="1">
+                      <TextBox AutomationProperties.AutomationId="SpeakerName"
+                               AutomationProperties.Name="{Binding Label, StringFormat='Name for {0}'}"
+                               PreviewKeyDown="OnSpeakerNameKeyDown"
+                               Text="{Binding NameText, UpdateSourceTrigger=LostFocus}" />
+                      <TextBlock Margin="12,0"
+                                 VerticalAlignment="Center"
+                                 Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                 IsHitTestVisible="False"
+                                 Text="Type a name">
+                        <TextBlock.Style>
+                          <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                              <DataTrigger Binding="{Binding NameText}" Value="">
+                                <Setter Property="Visibility" Value="Visible" />
+                              </DataTrigger>
+                            </Style.Triggers>
+                          </Style>
+                        </TextBlock.Style>
+                      </TextBlock>
+                    </Grid>
+                    <Button Grid.Row="1"
+                            Grid.Column="1"
+                            Width="36"
+                            Margin="8,0,0,0"
+                            VerticalAlignment="Stretch"
+                            AutomationProperties.AutomationId="PlaySample"
+                            Command="{Binding PlaySampleCommand}"
+                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                            Visibility="{Binding HasSample, Converter={StaticResource Visible}}">
+                      <Button.Style>
+                        <Style BasedOn="{StaticResource {x:Type Button}}" TargetType="Button">
+                          <Setter Property="Content" Value="&#xE768;" />
+                          <Setter Property="ToolTip" Value="Play a sample" />
+                          <Setter Property="AutomationProperties.Name" Value="{Binding Label, StringFormat='Play a sample of {0}'}" />
+                          <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                              <Setter Property="Content" Value="&#xE71A;" />
+                              <Setter Property="ToolTip" Value="Stop" />
+                              <Setter Property="AutomationProperties.Name" Value="{Binding Label, StringFormat='Stop the sample of {0}'}" />
+                            </DataTrigger>
+                          </Style.Triggers>
+                        </Style>
+                      </Button.Style>
+                    </Button>
+                    <TextBlock Grid.Row="2"
+                               Grid.ColumnSpan="2"
+                               Margin="0,4,0,0"
+                               AutomationProperties.AutomationId="SpeakerNameError"
+                               Foreground="{DynamicResource SystemFillColorCriticalBrush}"
+                               Text="{Binding NameError}"
+                               TextWrapping="Wrap"
+                               Visibility="{Binding HasNameError, Converter={StaticResource Visible}}" />
+                    <TextBlock Grid.Row="3"
+                               Grid.ColumnSpan="2"
+                               Margin="0,6,0,0"
+                               MaxHeight="60"
+                               AutomationProperties.AutomationId="SpeakerSample"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Text="{Binding Sample}"
+                               TextTrimming="WordEllipsis"
+                               TextWrapping="Wrap" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+
       <TextBox x:Name="Transcript"
                Padding="12,10"
                VerticalContentAlignment="Top"
@@ -230,6 +352,7 @@
       </StackPanel>
       <TextBlock Margin="0,0,16,0"
                  VerticalAlignment="Center"
+                 AutomationProperties.AutomationId="StatusText"
                  Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                  Text="{Binding StatusText}"
                  TextTrimming="CharacterEllipsis" />

@@ -42,9 +42,9 @@ public static class AudioDecoder
     {
         var file = new FileInfo(path);
         if (!file.Exists)
-            throw new TalktraceException($"The file doesn't exist: {path}");
+            throw new TalktraceException(FileErrors.Reading(new FileNotFoundException(null, path), file.Name));
         if (file.Length == 0)
-            throw new TalktraceException($"The file is empty: {file.Name}");
+            throw new TalktraceException($"{file.Name} is empty: it holds no audio.");
 
         try
         {
@@ -56,6 +56,12 @@ public static class AudioDecoder
             throw new TalktraceException(
                 "Windows Media Foundation isn't installed, so Talktrace can't read audio files. " +
                 "On Windows N editions, install the Media Feature Pack from Settings > Apps > Optional features.", e);
+        }
+        catch (Exception e) when ((e is COMException or IOException or UnauthorizedAccessException)
+                                  && FileErrors.Describe(e, file.Name, saving: false) is not null)
+        {
+            // Moved, in use by another app, an online-only cloud file, a network folder that's gone
+            throw new TalktraceException(FileErrors.Reading(e, file.Name), e);
         }
         catch (Exception e) when (e is COMException or MediaFoundationException or InvalidDataException)
         {

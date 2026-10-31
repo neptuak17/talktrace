@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using Talktrace.Core;
+using Talktrace.Core.Logging;
 using Talktrace.Core.Models;
 using Talktrace.Core.Transcripts;
 using Talktrace.Core.Worker;
@@ -13,6 +14,7 @@ CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 
 if (args is [WorkerProtocol.WorkerArgument])
 {
+    Log.Start("worker");
     var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     using var stdin = new StreamReader(Console.OpenStandardInput(), utf8);
     using var stdout = new StreamWriter(Console.OpenStandardOutput(), utf8);
@@ -108,26 +110,39 @@ catch (ArgumentException e)
     return 2;
 }
 
+Log.Start("cli");
 try
 {
     if (benchmark)
+    {
         RunBenchmark(input, options, benchmarkMinutes);
-    else
-        await RunTranscription(input, options);
-    return 0;
+        return 0;
+    }
+    return await RunTranscription(input, options);
 }
 catch (TalktraceException e)
 {
+    Log.Error($"Job failed: {e.Message}", e);
     Console.Error.WriteLine(e.Message);
     return 1;
 }
+catch (Exception e)
+{
+    Log.Error("Job failed with an unexpected error.", e);
+    throw;
+}
 
-static async Task RunTranscription(string input, TranscribeOptions options)
+static async Task<int> RunTranscription(string input, TranscribeOptions options)
 {
     var progress = new ConsoleProgress();
     TranscriptResult result = await Transcriber.TranscribeAsync(input, options, progress, CancellationToken.None);
     progress.Finish();
 
+    if (result.SavedPath is null)
+    {
+        Console.Error.WriteLine($"{result.SaveError} The transcript wasn't saved; try --out with another folder.");
+        return 1;
+    }
     Console.WriteLine($"Saved: {result.SavedPath}");
     string paragraphs = result.SpeakerLabels
         ? $"Speakers: {result.Speakers.Count} · Turns: {result.Turns.Count}"
@@ -140,6 +155,7 @@ static async Task RunTranscription(string input, TranscribeOptions options)
     Console.WriteLine($"  {"Total",-20}{Seconds(result.TotalElapsed),9}   real-time factor {result.RealTimeFactor:F3}");
     Console.WriteLine();
     Console.WriteLine($"Peak memory: {Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024):N0} MB");
+    return 0;
 }
 
 static void RunBenchmark(string input, TranscribeOptions options, double minutes)

@@ -51,7 +51,7 @@ public class ParakeetIntegrationTests
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(Path.Combine(folder, "sample - transcript.txt"), result.SavedPath);
-            string saved = await File.ReadAllTextAsync(result.SavedPath, TestContext.Current.CancellationToken);
+            string saved = await File.ReadAllTextAsync(result.SavedPath!, TestContext.Current.CancellationToken);
             Assert.StartsWith("Transcript: sample.wav\r\n", saved);
             Assert.Contains("portrait", saved);
             Assert.DoesNotContain("Speaker", saved);
@@ -105,7 +105,7 @@ public class ParakeetIntegrationTests
             Assert.All(result.Turns, t => Assert.NotNull(t.Speaker));
             Assert.Equal(1, result.Turns[0].Speaker);
             Assert.Contains(result.Timings, t => t.Stage == TranscribeStage.IdentifyingSpeakers);
-            string saved = await File.ReadAllTextAsync(result.SavedPath, TestContext.Current.CancellationToken);
+            string saved = await File.ReadAllTextAsync(result.SavedPath!, TestContext.Current.CancellationToken);
             Assert.Contains("\r\nSpeakers: Speaker 1", saved);
             Assert.Contains("\r\n\r\nSpeaker 1: ", saved);
         }
