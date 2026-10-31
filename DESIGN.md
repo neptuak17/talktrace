@@ -81,6 +81,7 @@ Alongside these, one standing design rule: **nothing in v1 may compromise a poss
 | The log writes one line at a time under a named mutex (`Local\Talktrace.Log`), shared by the app and the worker. | Two processes append to the same daily file; the mutex keeps their lines whole. Both run in one package in a Store build, so the name still works there. |
 | The speakers panel plays samples with NAudio 3's `WasapiPlayer` (built with `WasapiPlayerBuilder`, shared mode). | NAudio 3.3 marks `WasapiOut` obsolete, which the warnings-as-errors build refuses. |
 | Dropdown items return their label from `ToString`. | Found in Milestone 5: UI Automation and screen readers announced the Speakers items as raw record text ("SpeakerChoice { Label = 2, … }"). |
+| Playing the recording from a point in the transcript is a later enhancement, not yet scheduled. When built: a Play from here item on the transcript's right-click menu and a shortcut play from the word under the cursor until stopped, with Play/Pause and back/forward 10 s. The result keeps every word's time (about 8,000 words for 49 minutes). The paragraph is found by counting paragraphs and the word by counting words into it; an edited paragraph plays from its start. Highlighting words as they play would need a richer text control than the plain text box, so it waits until the basic version proves useful. The user chose this after Milestone 5. | Most of it exists already: turn times in the result, word times in the pipeline, and the speakers panel's sample player, which can seek. Editing is what makes a cursor position hard to map back to a time, hence the fallback. It needs no package or capability (section 18). |
 | Choosing or dropping a file reads its length from the header first, so an unreadable file is reported then, not after Transcribe. | Media Foundation opens the file without decoding it, which takes a moment, and the same error messages as decoding apply. |
 
 ## 4. Technology
@@ -428,7 +429,7 @@ Work through these in order. Stop at the end of each one and show the results be
 
 Real-time (live) transcription, NPU or GPU acceleration, Whisper or any other ASR engine, summaries or any LLM features, a batch queue, an installer or MSIX package, code signing, auto-update, translation, capturing just one app's audio (such as only Teams) instead of all system audio, and any cloud service.
 
-Possible later enhancements the user has named: the Multilingual profile (section 3), merging two speakers into one, and playing the recording from a chosen point in the transcript.
+Possible later enhancements the user has named: the Multilingual profile (section 3), merging two speakers into one, and playing the recording from a chosen point in the transcript (designed in section 3).
 
 ## 18. Keeping the Microsoft Store path open
 
