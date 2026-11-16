@@ -15,4 +15,7 @@
   <ItemGroup Label="Tests only; never shipped">
     <PackageVersion Include="xunit.v3" Version="[4.0.2]" />
   </ItemGroup>
+  <!-- One build tool can't be listed here: the installer's WixToolset.Sdk is an MSBuild project SDK,
+       so its exact version (5.0.2, the last before WiX's maintenance fee) is pinned in global.json. -->
+
 </Project>

@@ -62,7 +62,7 @@ internal static class SpeakerDiarizer
         using var diarizer = new OfflineSpeakerDiarization(config);
         if (NativeHandle.IsNull(diarizer))
             throw new TalktraceException(
-                @"The speaker identification models couldn't be loaded. Run scripts\get-models.ps1 to replace them.");
+                "The speaker identification models couldn't be loaded. Reinstall Talktrace to restore them.");
         if (diarizer.SampleRate != audio.SampleRate)
             throw new InvalidOperationException(
                 $"Speaker identification needs {diarizer.SampleRate} Hz audio, not {audio.SampleRate} Hz.");
@@ -96,7 +96,7 @@ internal static class SpeakerDiarizer
         using var extractor = new SpeakerEmbeddingExtractor(config);
         if (NativeHandle.IsNull(extractor))
             throw new TalktraceException(
-                @"The speaker identification models couldn't be loaded. Run scripts\get-models.ps1 to replace them.");
+                "The speaker identification models couldn't be loaded. Reinstall Talktrace to restore them.");
 
         var groups = new List<VoiceGroup>();
         foreach (IGrouping<int, SpeakerSegment> group in segments.GroupBy(s => s.Speaker).OrderBy(g => g.Key))

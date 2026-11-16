@@ -644,7 +644,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (missing.Count == 0)
             return null;
         return $"Talktrace can't find {(missing.Count == 1 ? "this model" : "these models")}: {string.Join(", ", missing)}. " +
-               @"Download them with scripts\get-models.ps1, then click Transcribe again.";
+               "Reinstall Talktrace to restore them, then click Transcribe again.";
     }
 
     private void ShowTranscript(string? text)

@@ -201,5 +201,5 @@ public static class Transcriber
         ModelLocator.Find(relativePath)
         ?? throw new TalktraceException(
             $"The {profile.DisplayName} models aren't installed ({relativePath} is missing). " +
-            @"Run scripts\get-models.ps1 to download them.");
+            "Reinstall Talktrace to restore them.");
 }

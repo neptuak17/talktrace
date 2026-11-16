@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Talktrace's installer (DESIGN.md section 13): an ARM64 MSI that installs for the current user
+  only, with no admin rights, into %LOCALAPPDATA%\Programs\Talktrace. It carries the app, the
+  Fast profile's models (in models\, next to the exe, where the app looks first) and the notices.
+  No custom actions and no wizard pages: Windows Installer runs it natively, with a progress bar.
+
+  The UpgradeCode never changes: it is how a newer Talktrace MSI finds and replaces an older one.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Talktrace"
+           Manufacturer="Talktrace"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="{98B62DF2-8DCF-4619-9F20-07C0A1CC6552}"
+           Scope="perUser"
+           Compressed="yes">
+
+    <!-- Each build has a new product code, so a rebuild of the same version must also count as an
+         upgrade, or it would install beside the copy already there. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Talktrace is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="medium" />
+
+    <!-- Installed apps: Talktrace's icon, and Uninstall only (nothing to modify). -->
+    <Icon Id="Talktrace.ico" SourceFile="$(sys.SOURCEFILEDIR)..\src\Talktrace.App\Talktrace.ico" />
+    <Property Id="ARPPRODUCTICON" Value="Talktrace.ico" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Talktrace">
+          <Directory Id="ModelsFolder" Name="models">
+            <Directory Id="ParakeetFolder" Name="sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8" />
+            <Directory Id="PyannoteFolder" Name="sherpa-onnx-pyannote-segmentation-3-0" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Talktrace">
+      <!-- The app, its runtime and the notices. -->
+      <Files Directory="INSTALLFOLDER" Include="$(var.StagingDir)\*" />
+      <!-- The models. -->
+      <Files Directory="ModelsFolder" Include="$(var.StagingDir)\models\*" />
+      <Files Directory="ParakeetFolder" Include="$(var.StagingDir)\models\sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8\*" />
+      <Files Directory="PyannoteFolder" Include="$(var.StagingDir)\models\sherpa-onnx-pyannote-segmentation-3-0\*" />
+
+      <!-- Folders in the user profile need removing explicitly on uninstall; a per-user
+           component keys on a value under HKCU. -->
+      <Component Id="Folders" Directory="INSTALLFOLDER" Guid="{DA42D421-EC63-47A3-AA92-92C4E25A9866}">
+        <RegistryValue Root="HKCU" Key="Software\Talktrace\Installer" Name="Folders" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveParakeetFolder" Directory="ParakeetFolder" On="uninstall" />
+        <RemoveFolder Id="RemovePyannoteFolder" Directory="PyannoteFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveModelsFolder" Directory="ModelsFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+        <!-- Removed only if empty, so other apps installed there are untouched. -->
+        <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+      </Component>
+
+      <!-- Start menu shortcut, for this user. -->
+      <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="{80FC7075-72CF-44F4-B086-6BCF45CD35F8}">
+        <Shortcut Id="TalktraceShortcut"
+                  Name="Talktrace"
+                  Description="Turn meeting recordings into transcripts"
+                  Target="[INSTALLFOLDER]Talktrace.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\Talktrace\Installer" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </Feature>
+  </Package>
+</Wix>

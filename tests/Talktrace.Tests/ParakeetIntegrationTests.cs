@@ -1,3 +1,5 @@
+using NAudio.MediaFoundation;
+using NAudio.Wave;
 using Talktrace.Core;
 using Talktrace.Core.Asr;
 using Talktrace.Core.Audio;
@@ -62,6 +64,62 @@ public class ParakeetIntegrationTests
             Directory.Delete(folder, recursive: true);
         }
     }
+
+    [Theory]
+    [InlineData("mp3")]
+    [InlineData("wma")]
+    [InlineData("m4a")]
+    public async Task Transcribes_the_sample_the_same_from_compressed_formats(string extension)
+    {
+        string modelsDir = RequireModels();
+        string folder = Directory.CreateTempSubdirectory("talktrace-").FullName;
+        try
+        {
+            string wav = Path.Combine(folder, "sample.wav");
+            File.Copy(SampleWav(modelsDir), wav);
+
+            // Windows' encoders don't all take 16 kHz mono (MP3 and AAC want 44.1 or 48 kHz, and WMA
+            // stereo), so convert the sample to 48 kHz stereo first, as a meeting recording would be.
+            string wav48 = Path.Combine(folder, "sample-48k.wav");
+            using (var reader = new WaveFileReader(wav))
+            using (var resampler = new MediaFoundationResampler(reader, new WaveFormat(48000, 16, 2)))
+                WaveFileWriter.CreateWaveFile(wav48, resampler);
+
+            string encoded = Path.Combine(folder, $"sample.{extension}");
+            try
+            {
+                using var reader = new WaveFileReader(wav48);
+                switch (extension)
+                {
+                    case "mp3": MediaFoundationEncoder.EncodeToMp3(reader, encoded); break;
+                    case "wma": MediaFoundationEncoder.EncodeToWma(reader, encoded); break;
+                    default: MediaFoundationEncoder.EncodeToAac(reader, encoded); break;
+                }
+            }
+            catch (InvalidOperationException e)
+            {
+                Assert.Skip($"Windows has no {extension} encoder here: {e.Message}");
+            }
+
+            var options = new TranscribeOptions { Speakers = SpeakerSetting.None, NumThreads = 4 };
+            TranscriptResult fromWav = await Transcriber.TranscribeAsync(wav, options, null, TestContext.Current.CancellationToken);
+            TranscriptResult fromEncoded = await Transcriber.TranscribeAsync(encoded, options, null, TestContext.Current.CancellationToken);
+
+            Assert.NotEmpty(Words(fromWav));
+            Assert.Equal(Words(fromWav), Words(fromEncoded));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    private static string[] Words(TranscriptResult result) =>
+        string.Join(' ', result.Turns.Select(t => t.Text))
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(w => new string(w.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant())
+            .Where(w => w.Length > 0)
+            .ToArray();
 
     [Fact]
     public void Identifies_the_speaker_in_the_sample_wav()

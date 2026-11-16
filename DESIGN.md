@@ -1,7 +1,7 @@
 # Talktrace — Design
 
 The working design for Talktrace. It replaces the original build brief, which is not kept.
-Last updated 2026-10-30.
+Last updated 2026-11-16.
 
 ## 1. Goal
 
@@ -48,7 +48,7 @@ Alongside these, one standing design rule: **nothing in v1 may compromise a poss
 | ARM64X files pass the ARM64 check. | .NET's WPF ships `vcruntime140_cor3.dll` as ARM64X. Its header says ARM64 and an ARM64 process runs its native ARM64 code, so nothing is emulated. |
 | Tests use xUnit v3 on Microsoft.Testing.Platform. | The .NET 10 SDK no longer runs xUnit v3 through the older VSTest runner; this also drops two test packages. |
 | The recognizer uses 6 threads by default and decodes one chunk at a time. | Milestone 2 benchmark, first 10 minutes of the test recording: 4, 6, 8 and 11 threads gave real-time factors of 0.030, 0.029, 0.031 and 0.033. Batching 2, 4 or 8 chunks per call was slower (0.033 to 0.036). |
-| Nothing in v1 may compromise a possible Microsoft Store release; section 18 lists the rules, and every milestone is checked against them. | Audited after Milestones 2, 3, 4 and 5: no conflicts. Milestone 5 writes settings and logs only under `%LOCALAPPDATA%\Talktrace` (known folder, never the app's folder), reaches them through in-app Open log folder rather than an AppData path, adds no package, network code or capability (sample playback is shared-mode WASAPI output), assumes no processor (the log records the architecture it finds; a saved thread count is clamped to this processor's), and its cross-process log mutex is session-local, which works inside one package. Milestone 4 launches the worker from the app's own folder and Explorer from the Windows folder; it writes only transcripts (next to the recording, or where Save as puts them) and, for Open models folder, creates the models folder under LocalAppData, opened from inside the app. Its one new package, CommunityToolkit.Mvvm, is MIT; it adds no network code and no capability. Earlier audits: Milestone 3 writes nothing new, reads its models through the same locator, assumes no processor, and uses only models already listed with commercial-use licences. The only file writes are transcripts next to the recording. Paths come from the app folder or Windows known folders. The `win-arm64` sherpa-onnx package reference is harmless for an x64 build, because the main package already brings every platform's native files and an x64 build selects only the x64 ones. |
+| Nothing in v1 may compromise a possible Microsoft Store release; section 18 lists the rules, and every milestone is checked against them. | Audited after Milestones 2, 3, 4, 5 and 6: no conflicts. Milestone 6 changes the app only by adding an icon (a Store package adds its own logo images). The MSI is a separate, unpackaged way to install: it writes the app folder only while installing (the app itself never does), puts the models inside the package as the Store build will, and needs no capability; the Store build would replace it with MSIX rather than build on it. WiX is a build tool and nothing of it ships. The version stays three-part (0.1.0), no network code is added, and the notices now carry the licence texts and copyright lines a Store About screen will need. Milestone 5 writes settings and logs only under `%LOCALAPPDATA%\Talktrace` (known folder, never the app's folder), reaches them through in-app Open log folder rather than an AppData path, adds no package, network code or capability (sample playback is shared-mode WASAPI output), assumes no processor (the log records the architecture it finds; a saved thread count is clamped to this processor's), and its cross-process log mutex is session-local, which works inside one package. Milestone 4 launches the worker from the app's own folder and Explorer from the Windows folder; it writes only transcripts (next to the recording, or where Save as puts them) and, for Open models folder, creates the models folder under LocalAppData, opened from inside the app. Its one new package, CommunityToolkit.Mvvm, is MIT; it adds no network code and no capability. Earlier audits: Milestone 3 writes nothing new, reads its models through the same locator, assumes no processor, and uses only models already listed with commercial-use licences. The only file writes are transcripts next to the recording. Paths come from the app folder or Windows known folders. The `win-arm64` sherpa-onnx package reference is harmless for an x64 build, because the main package already brings every platform's native files and an x64 build selects only the x64 ones. |
 | With speaker labels off, paragraphs split at pauses only, never on length. | A 100-word cap ending paragraphs at the next sentence end was tried in Milestone 2 and cut paragraphs off mid-thought. Long paragraphs are the accepted trade-off. |
 | Speaker segmentation uses pyannote's full-precision `model.onnx`, not `model.int8.onnx`. | On the 49-minute test recording (fixed count 5), the int8 model found no speaker for 34% of the recognised words, spread evenly through the recording; full precision missed 0.3%. Adding 10 dB of gain didn't help int8, so quantization is the cause. Full precision took 258 s against about 200 s. |
 | Speaker identification uses the same thread count as the recognizer (default 6) for both segmentation and embeddings. | The user's earlier 50-minute test used 6 threads for each. One thread setting keeps Advanced simple. |
@@ -83,6 +83,19 @@ Alongside these, one standing design rule: **nothing in v1 may compromise a poss
 | Dropdown items return their label from `ToString`. | Found in Milestone 5: UI Automation and screen readers announced the Speakers items as raw record text ("SpeakerChoice { Label = 2, … }"). |
 | Playing the recording from a point in the transcript is a later enhancement, not yet scheduled. When built: a Play from here item on the transcript's right-click menu and a shortcut play from the word under the cursor until stopped, with Play/Pause and back/forward 10 s. The result keeps every word's time (about 8,000 words for 49 minutes). The paragraph is found by counting paragraphs and the word by counting words into it; an edited paragraph plays from its start. Highlighting words as they play would need a richer text control than the plain text box, so it waits until the basic version proves useful. The user chose this after Milestone 5. | Most of it exists already: turn times in the result, word times in the pipeline, and the speakers panel's sample player, which can seek. Editing is what makes a cursor position hard to map back to a time, hence the fallback. It needs no package or capability (section 18). |
 | Choosing or dropping a file reads its length from the header first, so an unreadable file is reported then, not after Transcribe. | Media Foundation opens the file without decoding it, which takes a moment, and the same error messages as decoding apply. |
+| Talktrace installs from an MSI, `Talktrace-<version>-arm64.msi`, with the Fast profile's models inside. It replaces the zip, its install scripts and its manual steps, which Milestone 6 built first. The user chose an MSI over an Inno Setup setup.exe and over a double-click install script in the zip, and chose to include the models. | Inno Setup's setup program is x86 (or x64), so it would run under emulation, against hard constraint 1; Windows Installer runs an ARM64 MSI natively. With the models inside, installing needs no download and no internet, as the Store build will be. |
+| The MSI installs for the current user only (`Scope="perUser"`, no admin rights, no UAC prompt) into `%LOCALAPPDATA%\Programs\Talktrace`, with the models in `models\` next to the exe, where the app already looks first. It adds a Start menu shortcut and an Installed apps entry with Talktrace's icon and no Modify button. It shows only a progress bar: no wizard pages, and no "Launch Talktrace" box, which would need a custom action. Publisher: "Talktrace". Uninstall removes the app and its models and keeps settings and logs in `%LOCALAPPDATA%\Talktrace`. A newer MSI replaces an older one (major upgrade); an older one is refused. The user chose these in Milestone 6. A rebuild of the same version also replaces the installed copy (`AllowSameVersionUpgrades`), since every build has a new product code and would otherwise install beside it; found when rebuilding after the user's first install. | Nothing in the MSI is custom code, so Windows Installer runs all of it natively. The UpgradeCode, `{98B62DF2-8DCF-4619-9F20-07C0A1CC6552}`, never changes: it is how a newer MSI finds the older one. |
+| The installer is built with WiX Toolset 5.0.2, pinned exactly. The user chose it in Milestone 6. | WiX 6 and later ask an Open Source Maintenance Fee of anyone using them in revenue-generating work, which Talktrace's use in client meetings likely is, and WiX 7 adds a EULA. WiX 5 predates the fee and is MS-RL; Talktrace's MSI holds no WiX code, so MS-RL doesn't reach it. Being an MSBuild project SDK, its version lives in `global.json`, not `Directory.Packages.props`. |
+| The installer project is `installer\` (`Talktrace.Installer.wixproj`, `Package.wxs`), outside the solution; only `package.ps1` builds it. The user chose this in Milestone 6. | A normal `dotnet build` shouldn't make a 540 MB installer or need the models. |
+| The MSI build suppresses three validation rules, ICE38, ICE61 and ICE91. | ICE38 wants every component in the user profile keyed on an HKCU value; the ~270 harvested files are one component each, keyed on the file. It guards roaming-profile repair; the folder and shortcut components do key on HKCU. ICE61 warns that same-version upgrades are allowed, which is deliberate. ICE91 warns that per-user files wouldn't reach every user of a per-machine install, which this package never is. |
+| `package.ps1` copies the models from the build machine's models folder and checks each file's SHA-256 against a list in the script. It ships only what the app loads, plus the segmentation model's licence file. | The installer always carries exactly the models that were tested. The archives' test audio, scripts and unused int8 segmentation model stay out. |
+| Version 0.1.0 for Milestone 6; 1.0.0 comes after Milestone 7, when v1's scope (recording) is complete. The user chose this. | |
+| The README leaves out the Multilingual profile; the notices list its model as not shipped, since `get-models.ps1 -Profile Multilingual` still downloads it. The user chose this in Milestone 6. | The app can't use it (section 3, Multilingual dropped from v1). |
+| THIRD-PARTY-NOTICES.md carries each shipped library's and model's copyright line and the full MIT and Apache-2.0 texts. .NET's own third-party notices (copied from the runtime pack the publish used) are installed beside it; WPF's and ONNX Runtime 1.28.2's are linked. The user chose this in Milestone 6. | MIT and Apache-2.0 require the licence text (and MIT the copyright line) to travel with copies of the binaries, which the installer is. sherpa-onnx and NeMo have no NOTICE file and no filled-in copyright line. |
+| The app has an icon: a blue (#0F6CBD) speech bubble with three white lines of text, as one .ico with PNG frames from 16 to 256 px, the smaller ones snapped to whole pixels. It shows on the exe, the window, the taskbar and the Start menu shortcut. The user approved drawing one in Milestone 6 and kept this design at the review. | Without one, Windows shows its generic program icon. |
+| No GitHub release in Milestone 6: the installer stays in `artifacts\` and the user copies it where they want. The user chose this. | A release would put binaries online under "all rights reserved"; that's a separate decision. |
+| `package.ps1` publishes with `ContinuousIntegrationBuild=true`, and refuses to package if Talktrace's own files contain this machine's repo or user-profile path, plain or JSON-escaped. Symbol files still ship. | Found in Milestone 6: Talktrace's assemblies and symbol files held the local source path, and with it the Windows user name, including inside the symbol files' source-link map, where the path is JSON-escaped. The setting maps it to `/_/`. Symbol files give logged stack traces their line numbers. |
+| An integration test transcribes MP3, WMA and M4A copies of the sherpa-onnx sample, made with Windows' own encoders from a 48 kHz stereo copy, and checks they give the same words as the WAV. | Milestone 2's tests only decoded tones. Windows' MP3 and AAC encoders take 44.1 or 48 kHz only, and its WMA encoder won't take 48 kHz mono. |
 
 ## 4. Technology
 
@@ -96,14 +109,15 @@ Alongside these, one standing design rule: **nothing in v1 may compromise a poss
 | Logging | A small hand-written file logger | No dependency. |
 | Settings | System.Text.Json | |
 | Tests | xUnit v3 | Runs on Microsoft.Testing.Platform, opted in through `global.json`. |
+| Installer | WiX Toolset 5.0.2 (`WixToolset.Sdk`) | Builds the per-user ARM64 MSI; build-time only. Pinned in `global.json` (section 3). |
 
-All package versions live in `Directory.Packages.props`, pinned exactly; no floating ranges.
+All package versions live in `Directory.Packages.props`, pinned exactly; no floating ranges. The one exception is the WiX SDK, an MSBuild project SDK, pinned exactly in `global.json`.
 
 ## 5. Repository layout
 
 ```
 Talktrace.slnx                  solution (.NET 10's default format)
-global.json                     pins the .NET 10 SDK
+global.json                     pins the .NET 10 SDK and the WiX SDK
 Directory.Build.props           shared settings: target framework, win-arm64, nullable, version
 Directory.Packages.props        every package version, pinned
 .gitignore  .gitattributes  .editorconfig
@@ -119,8 +133,10 @@ src/
 tests/
   Talktrace.Tests/              unit tests (no models needed) and integration tests (skip unless
                                 TALKTRACE_MODELS_DIR is set)
+installer/                      the MSI: Talktrace.Installer.wixproj and Package.wxs. Not in the
+                                solution; scripts/package.ps1 builds it.
 scripts/
-  get-models.ps1  verify-arm64.ps1  package.ps1  install-shortcut.ps1
+  get-models.ps1  verify-arm64.ps1  package.ps1
 README.md  DESIGN.md  CLAUDE.md  THIRD-PARTY-NOTICES.md
 ```
 
@@ -184,11 +200,11 @@ The 50-minute test used a fixed speaker count (`--clustering.num-clusters=3`) an
 
 Configure Parakeet as a NeMo transducer, or let sherpa-onnx detect the type from the model's metadata. A generic "transducer" setting can fail on a vocabulary-size metadata lookup.
 
-**Where models live.** The app looks in `models\` next to the exe, then in `%LOCALAPPDATA%\Talktrace\models\`. The `TALKTRACE_MODELS_DIR` environment variable overrides both, for development and tests.
+**Where models live.** The app looks in `models\` next to the exe, then in `%LOCALAPPDATA%\Talktrace\models\`. The `TALKTRACE_MODELS_DIR` environment variable overrides both, for development and tests. The installer puts the Fast profile's models in `models\` next to the exe; `get-models.ps1` fills the LocalAppData folder, for development and for building the installer.
 
 **`scripts/get-models.ps1`** downloads and extracts the models (Windows' built-in `tar` handles .tar.bz2). It checks SHA-256 hashes recorded in the script, taken from GitHub's release-asset digests where shown and otherwise recorded on first download. It skips files already present, is safe to re-run, and takes `-Profile Fast|Multilingual|All` and `-Destination` (default `%LOCALAPPDATA%\Talktrace\models`).
 
-**Startup check.** The app checks that the selected profile's models are present. If any are missing, it names them and shows the command to run, with an Open models folder button. Profiles whose models are missing are disabled in the Model dropdown.
+**Startup check.** The app checks that the selected profile's models are present. If any are missing, it names them and says to reinstall Talktrace to restore them (the user chose this wording in Milestone 6, when the models moved into the installer), with an Open models folder button. Profiles whose models are missing are disabled in the Model dropdown.
 
 ## 9. Recording a meeting
 
@@ -337,9 +353,17 @@ When it finishes, the CLI prints per-stage timings and the real-time factor.
 
 - **Publish** with `dotnet publish src/Talktrace.App -c Release -r win-arm64 --self-contained true`, and publish the CLI into the same output folder so both share the native DLLs and the app can launch the worker. A plain folder; use single-file only if the native libraries load reliably that way.
 - **Verify the architecture.** `scripts/verify-arm64.ps1` reads the PE header of every native binary in the output (the .exe files, `onnxruntime.dll`, the sherpa-onnx DLLs and any others) and fails unless each is ARM64 (machine type 0xAA64). ARM64X hybrids pass, because an ARM64 process runs their native ARM64 code; ARM64EC and x64 files fail. Managed IL-only assemblies, detected by their CLR header (they report an i386 machine type), are architecture-neutral and pass. It also lists any Visual C++ runtime DLLs the native files import, for information. Run it after every publish.
-- **Package.** `scripts/package.ps1` produces `Talktrace-<version>-win-arm64.zip` with the publish folder, README and THIRD-PARTY-NOTICES, and no models.
-- **Shortcut.** `scripts/install-shortcut.ps1` adds a Start menu shortcut for the current user. No admin rights.
-- **Signing.** Unsigned. The README explains the SmartScreen prompt on first launch (More info → Run anyway).
+- **Package.** `scripts/package.ps1` does the whole job and writes `artifacts\Talktrace-<version>-arm64.msi` (version from `Directory.Build.props`):
+  1. Publishes the app and the CLI into a fresh `artifacts\package\Talktrace-<version>` with `ContinuousIntegrationBuild=true`, and runs `verify-arm64.ps1` on it (no installer if it fails).
+  2. Adds README.md, THIRD-PARTY-NOTICES.md and .NET's `THIRD-PARTY-NOTICES.TXT` as `DOTNET-THIRD-PARTY-NOTICES.txt`.
+  3. Copies the models into `models\` from `TALKTRACE_MODELS_DIR` or `%LOCALAPPDATA%\Talktrace\models`, checking each file's SHA-256 against the list in the script.
+  4. Refuses to go on if the folder holds audio or video, transcripts, sidecars, logs, a model file not on the list, or (in Talktrace's own files) this machine's repo or profile path.
+  5. Builds `installer\Talktrace.Installer.wixproj` with the staged folder.
+
+  Milestone 6's MSI: 270 files, 841 MB installed, a 537 MB installer, about 3 minutes to build.
+- **Installed layout** (`%LOCALAPPDATA%\Programs\Talktrace\`): `Talktrace.exe`, `Talktrace.Cli.exe` and the runtime; README.md, THIRD-PARTY-NOTICES.md and DOTNET-THIRD-PARTY-NOTICES.txt; and `models\` (`silero_vad.onnx`, `nemo_en_titanet_small.onnx`, `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8\` with the encoder, decoder, joiner and tokens, and `sherpa-onnx-pyannote-segmentation-3-0\` with `model.onnx` and its LICENSE). Plus a Start menu shortcut, an Installed apps entry, and two values under `HKCU\Software\Talktrace\Installer` that Windows Installer keys the folder and shortcut on.
+- **Checking an MSI without installing it.** `msiexec /a <msi> /qn TARGETDIR=<folder>` unpacks it into the installed layout (under `LocalApp\Programs\Talktrace`) and registers nothing; run the app from there. Windows Installer's COM object (`WindowsInstaller.Installer`) reads its tables read-only. A real install from Claude's session isn't tried: it would change the user's own Start menu and Installed apps.
+- **Signing.** Unsigned. The README explains the SmartScreen prompt for a downloaded installer (More info → Run anyway, or Unblock in its Properties). Smart App Control blocks unsigned apps outright; the README lists it as a known limit.
 - **Prerequisites** in the README: the ARM64 .NET 10 SDK and Git. Visual Studio is optional.
 - **Where it's built.** On the ARM64 machine itself, so everything is built and tested natively. If ever built elsewhere (Linux or cloud, with `EnableWindowsTargeting=true`), say so clearly and give exact test steps rather than reporting it as working.
 
@@ -359,7 +383,8 @@ Work through these in order. Stop at the end of each one and show the results be
 4. **The app.** The WPF window wired to the worker: choose or drop a file, options, progress, cancel, transcript view, save and copy.
    - Show: the running app, tried on a real recording.
 5. **Polish.** The speakers panel with rename, settings persistence, auto-save, plain-language errors and logging. (The Multilingual profile was dropped from v1; section 3.)
-6. **Package.** Publish, ARM64 verification, the zip, README, THIRD-PARTY-NOTICES and the shortcut script.
+6. **Package.** Publish, ARM64 verification, the MSI installer with the models inside, README and THIRD-PARTY-NOTICES.
+   - Show: the installer's size and contents, the ARM64 check, and the app and CLI run from the MSI's unpacked files. Then the user installs it following only the README, runs the offline check, and uninstalls and reinstalls.
 7. **Record a meeting.** The Record a meeting tab, microphone and system-audio capture, silence keep-alive, the aligned writer, the three modes, crash-safe files and recovery, the two-track transcription path and echo removal. Then repeat the Milestone 6 packaging steps.
    - Show: a recorded Teams test call with my voice labelled by name, and the 90-minute alignment check.
 
@@ -386,15 +411,15 @@ Work through these in order. Stop at the end of each one and show the results be
 
 **Done when**
 
-- [ ] `verify-arm64.ps1` passes: every shipped native binary is ARM64.
-- [ ] A full transcription completes with the network disconnected.
-- [ ] In the app, I can choose a recording, click Transcribe and get a saved .txt with speaker labels.
-- [ ] WAV, MP3, M4A and Teams/Zoom MP4 files all work.
-- [ ] The window stays responsive, and Cancel stops a run within a few seconds at any stage.
-- [ ] Renaming a speaker updates the on-screen transcript, the Speakers line and the saved file.
-- [ ] The Fast profile meets the speed target, or the reason it can't is explained.
-- [ ] The README covers setup, model download, usage, settings and known limits.
-- [ ] The logs contain no transcript text.
+- [x] `verify-arm64.ps1` passes: every shipped native binary is ARM64. (Every publish since Milestone 1; Milestone 6's installer: 251 binaries.)
+- [x] A full transcription completes with the network disconnected. (Milestone 6: the user installed the MSI and transcribed offline.)
+- [x] In the app, I can choose a recording, click Transcribe and get a saved .txt with speaker labels. (Milestone 4 on the test recording; Milestone 6 from the MSI's unpacked files.)
+- [ ] WAV, MP3, M4A and Teams/Zoom MP4 files all work. (WAV and M4A on the test recording; MP3, WMA and M4A copies of the sample give the same words as its WAV (Milestone 6 test); AAC in an MP4 container decodes. Still to try: a real Teams or Zoom MP4 export, from the user.)
+- [x] The window stays responsive, and Cancel stops a run within a few seconds at any stage. (Milestone 4: 2.1 s during speaker identification, at once while reading audio.)
+- [x] Renaming a speaker updates the on-screen transcript, the Speakers line and the saved file. (Milestone 5 on the test recording, by counts; Milestone 6 from the MSI's unpacked files on the two-voice sample, Save included.)
+- [x] The Fast profile meets the speed target, or the reason it can't is explained. (Milestone 3: a 60-minute recording would take about 7.3 minutes against the 20-minute target.)
+- [x] The README covers setup, model download, usage, settings and known limits. (Milestone 6.)
+- [x] The logs contain no transcript text. (`LogTests`; Milestone 5's check on the test recording; Milestone 6's runs from the packaged app.)
 - [ ] I can record a Teams call while Teams is using the microphone, and both my voice and the other participants are captured, on the speakerphone, the Bluetooth headphones and the laptop's own speakers and mic.
 - [ ] Talktrace preselects the right call mode for each of those setups.
 - [ ] In the call modes, my speech is labelled with my name and everyone else gets speaker numbers.
@@ -424,10 +449,14 @@ Work through these in order. Stop at the end of each one and show the results be
 - **Exclusive mode.** If another app has taken exclusive control of the microphone, capture fails. Show a clear message pointing to the Windows sound setting.
 - **Microphone permission.** Windows privacy settings must allow desktop apps to use the microphone. Detect access-denied and say how to fix it.
 - **Laptop lid.** Closing the lid can sleep the PC despite `SetThreadExecutionState`, depending on power settings.
+- **Builds carry the local source path.** .NET writes the source folder (here under the user's profile, so it holds the Windows user name) into assemblies and symbol files, and JSON-escaped into the symbol files' source-link map. Package with `ContinuousIntegrationBuild=true`, as `package.ps1` does.
+- **Per-user MSI validation.** Harvested files in a per-user install fail ICE38 and ICE91, and allowing same-version upgrades trips ICE61; warnings are errors in this build, so all three are suppressed in the installer project, for the reasons in section 3.
+- **Same-version MSI rebuilds.** Each build gets a new product code. Without `AllowSameVersionUpgrades`, a rebuild of an installed version installs beside it, giving two entries in Installed apps.
+- **Windows' audio encoders are picky.** The MP3 and AAC encoders take 44.1 or 48 kHz only; the WMA encoder won't take 48 kHz mono. Tests that make compressed files convert to 48 kHz stereo first.
 
 ## 17. Out of scope for v1
 
-Real-time (live) transcription, NPU or GPU acceleration, Whisper or any other ASR engine, summaries or any LLM features, a batch queue, an installer or MSIX package, code signing, auto-update, translation, capturing just one app's audio (such as only Teams) instead of all system audio, and any cloud service.
+Real-time (live) transcription, NPU or GPU acceleration, Whisper or any other ASR engine, summaries or any LLM features, a batch queue, an MSIX package (the MSI installer was added in Milestone 6), code signing, auto-update, translation, capturing just one app's audio (such as only Teams) instead of all system audio, and any cloud service.
 
 Possible later enhancements the user has named: the Multilingual profile (section 3), merging two speakers into one, and playing the recording from a chosen point in the transcript (designed in section 3).
 

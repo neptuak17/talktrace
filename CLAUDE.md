@@ -4,7 +4,7 @@ A native Windows on ARM64 desktop app that turns meeting recordings into speaker
 
 **[DESIGN.md](DESIGN.md) is the source of truth.** Read it before changing anything, and update it when a decision changes. Work milestone by milestone (DESIGN.md section 14) and stop at the end of each one for review.
 
-Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speaker labels), 4 (the app) and 5 (polish) done and reviewed; the Multilingual profile was dropped from v1. Next: Milestone 6 (package).
+Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speaker labels), 4 (the app) and 5 (polish) done and reviewed; the Multilingual profile was dropped from v1. Milestone 6 (package: a per-user ARM64 MSI with the models inside) done; the user installed it, transcribed offline and kept the icon. Not yet tried by the user: installing a rebuild over an installed copy, uninstall and reinstall, and a real Teams or Zoom MP4. Next: Milestone 7 (record a meeting).
 
 ## Working agreement
 
@@ -40,6 +40,7 @@ Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speake
   - Invoking a WPF button through UI Automation returns before its click runs, so a dialog it opens appears a moment later; wait for it.
   - The file dialogs' controls show as panes, without patterns. Open dialog: `WM_SETTEXT` the file name into the last control with id 1148, then click Open (id 1). Save dialog: the file name box is the id 1001 control whose name is the current file name (another 1001 is the address bar).
   - Click dialog buttons with `PostMessage(BM_CLICK)`, not `SendMessage`: if the click opens another modal (such as "replace the file?"), `SendMessage` blocks until it closes.
+  - The public two-voice file: the sherpa-onnx sample, 0.8 s of silence, a copy slowed to 0.7× (which also lowers its pitch), silence, then the sample again. A 0.8× copy is too alike and comes out as one speaker.
 - The Fluent theme draws an indeterminate progress bar as a moving dash with no track, so a screenshot can miss it.
 
 ## Polish (Milestone 5)
@@ -47,6 +48,13 @@ Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speake
 - The log (`Talktrace.Core.Logging.Log`) is shared by the app, the worker and the CLI; nothing is written until a process calls `Log.Start`. `TALKTRACE_LOG_DIR` points it somewhere else; set it when running the app or CLI during development so the log is readable, and `LogTests` checks a real job's log for transcript words. `Log.Redact` keeps a path's folder and name out of every line: call it for each recording and transcript path before anything that might log it.
 - Settings live in `%LOCALAPPDATA%\Talktrace\settings.json` (`SettingsFile`), which Claude's runs write to the virtualised copy, not the user's.
 - NAudio 3.3 marks `WasapiOut` obsolete; play audio with `WasapiPlayerBuilder().WithSharedMode().Build()`.
+
+## Package (Milestone 6)
+
+- Talktrace installs from a per-user ARM64 MSI with the models inside, built with WiX 5.0.2 (pinned in `global.json`; WiX 6 and later charge a maintenance fee, so don't upgrade without asking). `scripts\package.ps1` is the only way to build it: it publishes into a fresh `artifacts\package\Talktrace-<version>` with `ContinuousIntegrationBuild=true` (otherwise the source path, and with it the user name, ends up in the assemblies and symbol files), runs the ARM64 check, adds the docs and the hash-checked models, refuses to package recordings, transcripts, logs, unlisted model files or local paths, and builds `installer\`. Details in DESIGN.md section 13.
+- Never install the MSI from Claude's session: Windows Installer would really install it into the user's profile, Start menu and Installed apps. Check it with `msiexec /a <msi> /qn TARGETDIR=<folder under artifacts>`, which only unpacks it, and run the CLI and the app from the unpacked `LocalApp\Programs\Talktrace` on public audio only (the UI Automation notes above apply). Delete the unpacked folder afterwards; it's 840 MB.
+- A new model file, or a changed one, needs its SHA-256 in `package.ps1`'s list.
+- The README is the user's install guide. When behaviour, options or limits change, update it too.
 
 ## Hard constraints
 
@@ -90,6 +98,8 @@ $env:TALKTRACE_MODELS_DIR = "$env:LOCALAPPDATA\Talktrace\models"
 dotnet test -c Release        # now including the tests that run the real models
 
 .\scripts\get-models.ps1      # Fast profile into %LOCALAPPDATA%\Talktrace\models; -Profile All adds Multilingual
+
+.\scripts\package.ps1         # publish, ARM64 check, models, then artifacts\Talktrace-<version>-arm64.msi (about 3 minutes)
 
 dotnet publish src/Talktrace.App -c Release -r win-arm64 --self-contained true -o artifacts/publish
 dotnet publish src/Talktrace.Cli -c Release -r win-arm64 --self-contained true -o artifacts/publish

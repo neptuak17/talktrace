@@ -6,10 +6,17 @@
     <RootNamespace>Talktrace.App</RootNamespace>
     <!-- ThemeMode, which follows the Windows light or dark setting with the Fluent theme, is still marked experimental. -->
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
+    <!-- The exe's icon, which Explorer and the Start menu shortcut show. -->
+    <ApplicationIcon>Talktrace.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The window's title bar and taskbar icon. -->
+    <Resource Include="Talktrace.ico" />
   </ItemGroup>
 
   <ItemGroup>

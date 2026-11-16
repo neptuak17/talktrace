@@ -1,0 +1,18 @@
+<Project Sdk="WixToolset.Sdk">
+  <!-- Builds Talktrace's per-user ARM64 MSI from a staged folder (the published app, the models
+       and the notices). Run it through scripts\package.ps1, which stages that folder; it is not
+       part of the solution, so a normal build doesn't make a 650 MB installer. DESIGN.md section 13. -->
+  <PropertyGroup>
+    <OutputName>Talktrace</OutputName>
+    <InstallerPlatform>arm64</InstallerPlatform>
+    <DefineConstants>StagingDir=$(StagingDir);ProductVersion=$(Version)</DefineConstants>
+    <!-- Two validation rules that don't fit a per-user-only package with harvested files:
+         ICE38 wants every component in the user profile keyed on an HKCU value, which harvested
+         files (one component each, keyed on the file) can't be; it guards roaming-profile repair,
+         and the folder and shortcut components do key on HKCU. ICE91 warns that files in a
+         per-user folder wouldn't reach every user in a per-machine install, which this package
+         never is (Scope="perUser"). ICE61 warns that same-version upgrades are allowed, which
+         Package.wxs does on purpose. -->
+    <SuppressIces>ICE38;ICE61;ICE91</SuppressIces>
+  </PropertyGroup>
+</Project>

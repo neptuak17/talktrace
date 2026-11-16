@@ -7,6 +7,7 @@
         mc:Ignorable="d"
         d:DataContext="{d:DesignInstance Type=local:MainViewModel}"
         Title="Talktrace"
+        Icon="Talktrace.ico"
         Width="900"
         Height="700"
         MinWidth="800"
