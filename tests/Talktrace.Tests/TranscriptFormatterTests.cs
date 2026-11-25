@@ -58,6 +58,20 @@ public class TranscriptFormatterTests
     }
 
     [Fact]
+    public void In_a_call_recording_labels_my_turns_with_my_name_and_lists_me_first()
+    {
+        TranscriptResult result = Result(new Turn(1, 0, 1, "Welcome."), new Turn(0, 2, 3, "Thanks."), new Turn(2, 4, 5, "Hi."))
+            with { YourName = "Cliff" };
+
+        string text = TranscriptFormatter.Format(result, includeTimestamps: false);
+
+        Assert.Equal([0, 1, 2], result.Speakers);
+        Assert.Contains("\r\nSpeakers: Cliff, Speaker 1, Speaker 2\r\n", text);
+        Assert.Contains("\r\n\r\nCliff: Thanks.\r\n", text);
+        Assert.Contains("\r\n\r\nSpeaker 1: Welcome.\r\n", text);
+    }
+
+    [Fact]
     public void Writes_the_header_then_one_paragraph_per_turn()
     {
         string text = TranscriptFormatter.Format(

@@ -12,9 +12,11 @@ using Talktrace.Core;
 using Talktrace.Core.Audio;
 using Talktrace.Core.Logging;
 using Talktrace.Core.Models;
+using Talktrace.Core.Recordings;
 using Talktrace.Core.Settings;
 using Talktrace.Core.Transcripts;
 using Talktrace.Core.Worker;
+using Talktrace.Recording;
 
 namespace Talktrace.App;
 
@@ -30,11 +32,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private const double SampleSeconds = 8;
 
     private readonly IDialogs _dialogs;
-    private readonly string _settingsPath;
+    private readonly SettingsStore _settings;
     private readonly DispatcherTimer _clockTimer;
     private readonly Stopwatch _jobClock = new();
     private readonly SamplePlayer _player = new();
-    private UserSettings _settings;
+    private readonly IReadOnlyList<SpeakerChoice> _fileSpeakerChoices;
+    private readonly IReadOnlyList<SpeakerChoice> _callSpeakerChoices;
+    private SpeakerChoice _fileSpeakers;
+    private SpeakerChoice _callSpeakers;
     private CancellationTokenSource? _jobCancel;
     private TranscribeProgress? _progress;
     private (TimeSpan At, int Done)? _firstChunk;
@@ -48,25 +53,38 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public MainViewModel(IDialogs dialogs, string settingsPath)
     {
         _dialogs = dialogs;
-        _settingsPath = settingsPath;
+        _settings = new SettingsStore(settingsPath);
         _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clockTimer.Tick += (_, _) => UpdateTimeText();
         _player.Finished += OnSampleFinished;
 
-        SpeakerChoices =
+        _fileSpeakerChoices =
         [
             new("Don't label speakers", SpeakerSetting.None),
             new("Auto-detect", SpeakerSetting.Auto),
             .. Enumerable.Range(2, 7).Select(n => new SpeakerChoice(n.ToString(CultureInfo.CurrentCulture), SpeakerSetting.Exactly(n))),
         ];
+        // For call recordings the count is of the other participants, and 1 skips speaker identification (section 9).
+        _callSpeakerChoices =
+        [
+            new("Don't label speakers", SpeakerSetting.None),
+            new("Auto-detect", SpeakerSetting.Auto),
+            new("1 other participant", SpeakerSetting.Exactly(1)),
+            .. Enumerable.Range(2, 7).Select(n => new SpeakerChoice($"{n} other participants", SpeakerSetting.Exactly(n))),
+        ];
+        _fileSpeakers = _fileSpeakerChoices[1];
+        _callSpeakers = _callSpeakerChoices[1];
+        SpeakerChoices = _fileSpeakerChoices;
         // Multilingual was dropped from v1 (DESIGN.md section 3); the Model dropdown shows once there are two profiles.
         Profiles = new[] { ModelProfile.Fast }.Select(p => new ProfileChoice(p, ModelLocator.Find(p.AsrDirectory) is not null)).ToList();
         SelectedProfile = Profiles.FirstOrDefault(p => p.IsInstalled) ?? Profiles[0];
-        SelectedSpeakers = SpeakerChoices[1];
+        SelectedSpeakers = _fileSpeakers;
         ResetAdvanced();
 
-        _settings = SettingsFile.Load(settingsPath);
-        ApplySettings(_settings);
+        ApplySettings(_settings.Current);
+        Record = new RecordViewModel(this, dialogs, _settings);
+        Record.RecordingStateChanged += () => OnPropertyChanged(nameof(WindowTitle));
+        SelectedTab = _settings.Current.LastTab == RecordTabName ? RecordTab : FileTab;
 
         RecordingTitle = "Drop a recording here";
         RecordingDetails = "or choose one: WAV, MP3, M4A, MP4 or WMA";
@@ -80,9 +98,31 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public event Action? TranscriptRewriting;
 
     /// <summary>Where the window was when Talktrace last closed, or null.</summary>
-    public WindowPlacement? SavedWindowPlacement => _settings.Window;
+    public WindowPlacement? SavedWindowPlacement => _settings.Current.Window;
+
+    // Tabs (DESIGN.md section 10): the window opens on the one used last.
+
+    public const int FileTab = 0;
+    public const int RecordTab = 1;
+    private const string RecordTabName = "record";
+
+    /// <summary>The Record a meeting tab.</summary>
+    public RecordViewModel Record { get; }
+
+    [ObservableProperty]
+    public partial int SelectedTab { get; set; }
+
+    partial void OnSelectedTabChanged(int value) =>
+        _settings.Update(s => s with { LastTab = value == RecordTab ? RecordTabName : "file" });
+
+    /// <summary>"Recording 12:34 – Talktrace" while recording (section 3), otherwise "Talktrace".</summary>
+    public string WindowTitle => Record.IsRecording ? $"{Record.WindowTitleSuffix} – Talktrace" : "Talktrace";
 
     // The recording
+
+    /// <summary>The chosen recording is a call Talktrace recorded, so it's transcribed as two tracks.</summary>
+    [ObservableProperty]
+    public partial bool IsCallRecording { get; private set; }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(TranscribeCommand))]
@@ -96,7 +136,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     // Options
 
-    public IReadOnlyList<SpeakerChoice> SpeakerChoices { get; }
+    /// <summary>The Speakers choices: counts of everyone for ordinary files, of the other participants for call recordings.</summary>
+    [ObservableProperty]
+    public partial IReadOnlyList<SpeakerChoice> SpeakerChoices { get; private set; }
 
     public IReadOnlyList<ProfileChoice> Profiles { get; }
 
@@ -202,12 +244,27 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     public partial bool HasErrorDetails { get; private set; }
 
-    /// <summary>True when closing needs no questions: no job running and no unsaved edits.</summary>
-    public bool CanCloseNow => !IsRunning && !HasUnsavedEdits;
-
     partial void OnSelectedProfileChanged(ProfileChoice value) => RefreshModelsMessage();
 
-    partial void OnSelectedSpeakersChanged(SpeakerChoice value) => RefreshModelsMessage();
+    partial void OnSelectedSpeakersChanged(SpeakerChoice value)
+    {
+        if (value is null)
+            return; // the list is being swapped
+        if (IsCallRecording)
+            _callSpeakers = value;
+        else
+            _fileSpeakers = value;
+        RefreshModelsMessage();
+    }
+
+    /// <summary>Shows the Speakers choices for the kind of recording chosen, each kind keeping its own selection.</summary>
+    private void ShowSpeakerChoicesFor(bool call)
+    {
+        SpeakerChoice selected = call ? _callSpeakers : _fileSpeakers;
+        IsCallRecording = call;
+        SpeakerChoices = call ? _callSpeakerChoices : _fileSpeakerChoices;
+        SelectedSpeakers = selected;
+    }
 
     partial void OnTranscriptTextChanged(string value)
     {
@@ -234,14 +291,26 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Log.Redact(path);
         try
         {
-            TimeSpan duration = await Task.Run(() => AudioDecoder.ReadDuration(path));
+            (TimeSpan duration, RecordingMode? call) = await Task.Run(() =>
+            {
+                TimeSpan length = AudioDecoder.ReadDuration(path);
+                bool isCall = RecordingSidecar.TryRead(path) is { IsCall: true } && AudioDecoder.ReadChannelCount(path) == 2;
+                return (length, isCall ? RecordingSidecar.TryRead(path)?.Mode : null);
+            });
             if (request != _openRequests || IsRunning)
                 return; // replaced by a later choice
             string fullPath = Path.GetFullPath(path);
             long size = new FileInfo(fullPath).Length;
             RecordingPath = fullPath;
             RecordingTitle = Path.GetFileName(fullPath);
-            RecordingDetails = $"{TranscriptFormatter.FormatDuration(duration)} · {FormatSize(size)} · " + Path.GetDirectoryName(fullPath);
+            string kind = call switch
+            {
+                RecordingMode.CallHeadphones => "Online call, headphones · ",
+                RecordingMode.CallSpeakers => "Online call, speakers · ",
+                _ => "",
+            };
+            RecordingDetails = $"{TranscriptFormatter.FormatDuration(duration)} · {FormatSize(size)} · {kind}" + Path.GetDirectoryName(fullPath);
+            ShowSpeakerChoicesFor(call is not null);
             Log.Info($"Recording chosen: {DescribeType(fullPath)} file, {FormatSize(size)}, {TranscriptFormatter.FormatDuration(duration)}.");
         }
         catch (Exception e) when (e is TalktraceException or IOException or UnauthorizedAccessException)
@@ -251,7 +320,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool CanTranscribe => RecordingPath is not null && !IsRunning;
+    /// <summary>No transcribing while recording (section 6).</summary>
+    private bool CanTranscribe => RecordingPath is not null && !IsRunning && !Record.IsRecording && !Record.IsStarting;
 
     [RelayCommand(CanExecute = nameof(CanTranscribe))]
     private async Task TranscribeAsync()
@@ -297,6 +367,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if (result.SavedPath is string saved)
             {
                 StatusText = $"Saved as {Path.GetFileName(saved)}";
+                RecycleRecordingIfNotKept(recording);
             }
             else
             {
@@ -406,9 +477,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MaxSpeechSeconds = Defaults.VadMaxSpeechSeconds.ToString(CultureInfo.CurrentCulture);
     }
 
-    /// <summary>Asks about a running job and unsaved edits. Returns true once the window may close.</summary>
+    /// <summary>Asks about a recording, a running job and unsaved edits. Returns true once the window may close.</summary>
     public async Task<bool> ConfirmCloseAsync()
     {
+        if (Record.IsRecording)
+        {
+            if (!_dialogs.ConfirmStopRecordingAndClose())
+                return false;
+            await Record.StopRecordingAsync(openAfterwards: false);
+        }
         if (IsRunning)
         {
             if (!_dialogs.ConfirmStopAndClose())
@@ -421,17 +498,105 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>Remembers where the window was, for the next launch.</summary>
-    public void SaveWindowPlacement(WindowPlacement placement)
+    public void SaveWindowPlacement(WindowPlacement placement) => _settings.Update(s => s with { Window = placement });
+
+    // Recording (DESIGN.md section 9)
+
+    /// <summary>True when closing needs no questions: nothing recording, no job running and no unsaved edits.</summary>
+    public bool CanCloseNow => !IsRunning && !HasUnsavedEdits && !Record.IsRecording;
+
+    internal void OnRecordingStarted()
     {
-        _settings = _settings with { Window = placement };
-        SettingsFile.Save(_settingsPath, _settings);
+        TranscribeCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(CanCloseNow));
+    }
+
+    /// <summary>Cancels the running job and waits for it to end, so a recording can start.</summary>
+    internal async Task CancelJobAsync()
+    {
+        Cancel();
+        if (TranscribeCommand.ExecutionTask is Task job)
+            await job;
+    }
+
+    /// <summary>
+    /// Opens a recording that just stopped in the transcribe flow, with the options its mode calls for, and starts the job
+    /// if Transcribe automatically when I stop is on.
+    /// </summary>
+    internal async Task OnRecordingFinishedAsync(string path, bool transcribe, bool switchTab)
+    {
+        TranscribeCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(CanCloseNow));
+        if (switchTab)
+            SelectedTab = FileTab;
+        if (!ConfirmDiscardingEdits())
+            return; // keep the transcript on screen; the recording is saved and can be chosen later
+        await OpenRecordingAsync(path);
+        if (transcribe && RecordingPath == Path.GetFullPath(path) && TranscribeCommand.CanExecute(null))
+            await TranscribeCommand.ExecuteAsync(null);
+    }
+
+    /// <summary>
+    /// At launch: offers to recover each recording Talktrace didn't finish (section 3). Recover and transcribe opens it
+    /// on the file tab and starts the job; any others are asked about at the next launch.
+    /// </summary>
+    public async Task CheckForUnfinishedRecordingsAsync()
+    {
+        foreach (UnfinishedRecording unfinished in RecordingRecovery.Find(Record.RecordingsFolder))
+        {
+            RecoverChoice choice = _dialogs.AskToRecover(unfinished.Sidecar.StartedAt.LocalDateTime, unfinished.Recorded);
+            if (choice == RecoverChoice.NotNow)
+                continue;
+            try
+            {
+                RecordingRecovery.Recover(unfinished);
+            }
+            catch (RecordingException e)
+            {
+                ShowError(e.Message, e.InnerException?.ToString());
+                continue;
+            }
+            if (choice == RecoverChoice.RecoverAndTranscribe)
+            {
+                await OnRecordingFinishedAsync(unfinished.Path, transcribe: true, switchTab: true);
+                return;
+            }
+        }
+    }
+
+    /// <summary>With Keep recordings after transcribing off, a recording Talktrace made goes to the Recycle Bin once its transcript is saved.</summary>
+    private void RecycleRecordingIfNotKept(string recording)
+    {
+        if (Record.KeepRecordings || RecordingSidecar.TryRead(recording) is null)
+            return;
+        try
+        {
+            RecycleBin.Send(recording, RecordingSidecar.PathFor(recording));
+            _transcribedRecording = null; // nothing left to play samples from
+            foreach (SpeakerRow row in Speakers)
+                row.CanPlay = false;
+            RecordingPath = null;
+            RecordingTitle = "Drop a recording here";
+            RecordingDetails = "or choose one: WAV, MP3, M4A, MP4 or WMA";
+            StatusText += " · recording moved to the Recycle Bin";
+            Log.Info("The recording was moved to the Recycle Bin after transcribing.");
+        }
+        catch (IOException e)
+        {
+            Log.Warning("The recording couldn't be moved to the Recycle Bin.", e);
+            StatusText += " · the recording couldn't be moved to the Recycle Bin";
+        }
     }
 
     /// <summary>For errors nothing else caught: the details go to the log and Copy details, and the window stays open.</summary>
     public void ShowUnexpectedError(Exception e) =>
         ShowError("Something went wrong in Talktrace. If it keeps happening, restart Talktrace.", e.ToString());
 
-    public void Dispose() => _player.Dispose();
+    public void Dispose()
+    {
+        _player.Dispose();
+        Record.Dispose();
+    }
 
     // The speakers panel
 
@@ -503,7 +668,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (result is { SpeakerLabels: true })
         {
             foreach (int speaker in result.Speakers)
-                Speakers.Add(new SpeakerRow(this, speaker, SpeakerNames.SampleTurn(result.Turns, speaker)));
+                Speakers.Add(new SpeakerRow(this, speaker, result.SpeakerName(speaker), SpeakerNames.SampleTurn(result.Turns, speaker)));
         }
         HasSpeakers = Speakers.Count > 0;
     }
@@ -513,8 +678,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void ApplySettings(UserSettings settings)
     {
         if (UserSettings.ParseSpeakers(settings.Speakers) is SpeakerSetting speakers
-            && SpeakerChoices.FirstOrDefault(c => c.Setting == speakers) is SpeakerChoice choice)
+            && _fileSpeakerChoices.FirstOrDefault(c => c.Setting == speakers) is SpeakerChoice choice)
             SelectedSpeakers = choice;
+        if (UserSettings.ParseSpeakers(settings.CallSpeakers) is SpeakerSetting callSpeakers
+            && _callSpeakerChoices.FirstOrDefault(c => c.Setting == callSpeakers) is SpeakerChoice callChoice)
+            _callSpeakers = callChoice;
         IncludeTimestamps = settings.IncludeTimestamps;
         if (settings.ClusteringThreshold is double threshold)
             ClusteringThreshold = threshold.ToString(CultureInfo.CurrentCulture);
@@ -529,16 +697,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Remembers the options a transcription started with; they have passed the checks by then.</summary>
     private void SaveOptions(TranscribeOptions options)
     {
-        _settings = _settings with
+        bool call = IsCallRecording;
+        _settings.Update(s => s with
         {
-            Speakers = UserSettings.ToText(options.Speakers),
+            Speakers = call ? s.Speakers : UserSettings.ToText(options.Speakers),
+            CallSpeakers = call ? UserSettings.ToText(options.Speakers) : s.CallSpeakers,
             IncludeTimestamps = options.IncludeTimestamps,
             ClusteringThreshold = options.ClusteringThreshold,
             Threads = options.NumThreads,
             MaxSpeechSeconds = options.VadMaxSpeechSeconds,
             MaxChunkSeconds = options.MaxChunkSeconds,
-        };
-        SettingsFile.Save(_settingsPath, _settings);
+        });
     }
 
     private void OnProgress(TranscribeProgress p)
@@ -614,6 +783,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         return BaseOptions() with
         {
+            YourName = Record.EffectiveYourName,
             IncludeTimestamps = IncludeTimestamps,
             NumThreads = threads,
             ClusteringThreshold = threshold,
@@ -698,7 +868,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private static void ShowInExplorer(string arguments)
+    internal static void ShowInExplorer(string arguments)
     {
         string explorer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
         Process.Start(new ProcessStartInfo(explorer, arguments) { UseShellExecute = false })?.Dispose();
@@ -727,7 +897,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         HasErrorDetails = false;
     }
 
-    private static string FormatSize(long bytes) => bytes switch
+    internal static string FormatSize(long bytes) => bytes switch
     {
         >= 1L << 30 => $"{bytes / (double)(1L << 30):0.0} GB",
         >= 1L << 20 => $"{bytes / (double)(1L << 20):0.0} MB",

@@ -22,6 +22,33 @@ public sealed record UserSettings
     public double? MaxChunkSeconds { get; init; }
     public WindowPlacement? Window { get; init; }
 
+    // Recording (DESIGN.md section 9; section 3, Milestone 7)
+
+    /// <summary>The Speakers choice for call recordings, remembered apart from ordinary files': none, auto, or 1 to 8 others.</summary>
+    public string? CallSpeakers { get; init; }
+
+    /// <summary>The name my turns carry in call recordings; null means "Me".</summary>
+    public string? YourName { get; init; }
+
+    /// <summary>Null means on, the default.</summary>
+    public bool? TranscribeWhenStopped { get; init; }
+
+    /// <summary>Null means on, the default.</summary>
+    public bool? KeepRecordings { get; init; }
+
+    /// <summary>Where recordings are saved; null means Documents\Talktrace\Recordings.</summary>
+    public string? RecordingsFolder { get; init; }
+
+    /// <summary>The tab the window opens on: "file" or "record".</summary>
+    public string? LastTab { get; init; }
+
+    /// <summary>The recording mode last used with each playback device, by its Windows ID.</summary>
+    public Dictionary<string, string>? ModeByPlayback { get; init; }
+
+    /// <summary>Documents\Talktrace\Recordings.</summary>
+    public static string DefaultRecordingsFolder =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Talktrace", "Recordings");
+
     public static string ToText(SpeakerSetting speakers) => speakers switch
     {
         { Label: false } => "none",

@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using Talktrace.Core.Settings;
@@ -19,8 +20,43 @@ public partial class MainWindow : Window, IDialogs
         InitializeComponent();
         _viewModel = new MainViewModel(this, SettingsFile.DefaultPath);
         _viewModel.TranscriptRewriting += KeepTranscriptPosition;
+        _viewModel.Record.RecordingStateChanged += ShowRecordingOnTaskbar;
         DataContext = _viewModel;
         RestorePlacement(_viewModel.SavedWindowPlacement);
+        StateChanged += (_, _) => UpdateRecordVisibility();
+        Loaded += async (_, _) =>
+        {
+            UpdateRecordVisibility();
+            await _viewModel.CheckForUnfinishedRecordingsAsync();
+        };
+    }
+
+    // The level meters run only while the Record a meeting tab shows and the window isn't minimised (DESIGN.md section 3).
+    private void OnTabChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ReferenceEquals(e.OriginalSource, Tabs))
+            UpdateRecordVisibility();
+    }
+
+    private void UpdateRecordVisibility() =>
+        _viewModel.Record.SetVisibility(Tabs.SelectedIndex == MainViewModel.RecordTab, WindowState == WindowState.Minimized);
+
+    private static readonly ImageSource RecordingDot = CreateRecordingDot();
+
+    /// <summary>A red dot over the taskbar button while recording, as well as in the window (section 3).</summary>
+    private void ShowRecordingOnTaskbar()
+    {
+        RecordViewModel record = _viewModel.Record;
+        TaskbarItemInfo.Overlay = record.IsRecording && !record.IsPaused ? RecordingDot : null;
+        TaskbarItemInfo.Description = record.IsRecording ? (record.IsPaused ? "Recording paused" : "Recording") : "";
+    }
+
+    private static ImageSource CreateRecordingDot()
+    {
+        var dot = new DrawingImage(new GeometryDrawing(
+            new SolidColorBrush(Color.FromRgb(0xC4, 0x2B, 0x1C)), new Pen(Brushes.White, 1.5), new EllipseGeometry(new Point(8, 8), 7, 7)));
+        dot.Freeze();
+        return dot;
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -114,6 +150,7 @@ public partial class MainWindow : Window, IDialogs
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } files)
             return;
         e.Handled = true;
+        _viewModel.SelectedTab = MainViewModel.FileTab;
         await _viewModel.OpenRecordingAsync(files[0]);
     }
 
@@ -156,4 +193,41 @@ public partial class MainWindow : Window, IDialogs
     public bool ConfirmStopAndClose() =>
         PromptWindow.Ask(this, "Stop transcribing and close?", "The transcription in progress will be cancelled.",
             "Stop and close", "Keep transcribing") == 0;
+
+    public string? ChooseFolder(string currentFolder)
+    {
+        var dialog = new OpenFolderDialog { Title = "Save recordings in" };
+        if (Directory.Exists(currentFolder))
+            dialog.InitialDirectory = currentFolder;
+        return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
+    }
+
+    public bool ConfirmCancelJobToRecord() =>
+        PromptWindow.Ask(this, "Cancel the transcription and start recording?",
+            "Talktrace can't transcribe while it records. The transcription in progress will be cancelled.",
+            "Cancel it and record", "Keep transcribing") == 0;
+
+    public bool ConfirmStopRecordingAndClose() =>
+        PromptWindow.Ask(this, "Stop recording and close?", "The recording will be stopped and saved.",
+            "Stop and close", "Keep recording") == 0;
+
+    public RecoverChoice AskToRecover(DateTime startedAt, TimeSpan recorded)
+    {
+        int minutes = (int)Math.Round(recorded.TotalMinutes);
+        string length = minutes switch
+        {
+            0 => "less than a minute",
+            1 => "1 minute",
+            _ => $"{minutes} minutes",
+        };
+        string when = startedAt.ToString("d MMM, HH:mm", System.Globalization.CultureInfo.CurrentCulture);
+        return PromptWindow.Ask(this, "Recover the unfinished recording?",
+                $"Talktrace closed while recording ({when}, {length} recorded). Recover it?",
+                "Recover and transcribe", "Recover", "Not now") switch
+        {
+            0 => RecoverChoice.RecoverAndTranscribe,
+            1 => RecoverChoice.Recover,
+            _ => RecoverChoice.NotNow,
+        };
+    }
 }

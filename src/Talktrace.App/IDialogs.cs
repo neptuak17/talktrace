@@ -7,7 +7,14 @@ public enum SaveChoice
     Cancel,
 }
 
-/// <summary>The dialogs the view model needs, shown by the window that owns them.</summary>
+public enum RecoverChoice
+{
+    RecoverAndTranscribe,
+    Recover,
+    NotNow,
+}
+
+/// <summary>The dialogs the view models need, shown by the window that owns them.</summary>
 public interface IDialogs
 {
     /// <returns>The chosen file, or null if cancelled.</returns>
@@ -21,4 +28,16 @@ public interface IDialogs
 
     /// <returns>True to stop the running job and close.</returns>
     bool ConfirmStopAndClose();
+
+    /// <returns>The chosen folder, or null if cancelled.</returns>
+    string? ChooseFolder(string currentFolder);
+
+    /// <returns>True to cancel the running transcription and start recording.</returns>
+    bool ConfirmCancelJobToRecord();
+
+    /// <returns>True to stop and save the recording, then close.</returns>
+    bool ConfirmStopRecordingAndClose();
+
+    /// <summary>Offers to recover a recording Talktrace didn't finish.</summary>
+    RecoverChoice AskToRecover(DateTime startedAt, TimeSpan recorded);
 }

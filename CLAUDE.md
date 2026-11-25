@@ -4,7 +4,7 @@ A native Windows on ARM64 desktop app that turns meeting recordings into speaker
 
 **[DESIGN.md](DESIGN.md) is the source of truth.** Read it before changing anything, and update it when a decision changes. Work milestone by milestone (DESIGN.md section 14) and stop at the end of each one for review.
 
-Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speaker labels), 4 (the app) and 5 (polish) done and reviewed; the Multilingual profile was dropped from v1. Milestone 6 (package: a per-user ARM64 MSI with the models inside) done; the user installed it, transcribed offline and kept the icon. Not yet tried by the user: installing a rebuild over an installed copy, uninstall and reinstall, and a real Teams or Zoom MP4. Next: Milestone 7 (record a meeting).
+Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speaker labels), 4 (the app) and 5 (polish) done and reviewed; the Multilingual profile was dropped from v1. Milestone 6 (package: a per-user ARM64 MSI with the models inside) done; the user installed it, transcribed offline, kept the icon, and checked installing a rebuild over an installed copy, uninstalling and reinstalling. Not yet tried: a real Teams or Zoom MP4. Milestone 7 (record a meeting): recording, the two-track path and the Record a meeting tab built and checked by Claude; waiting on the user's Teams calls on the three setups (the agreed check-in), then polish and repackaging as 1.0.0.
 
 ## Working agreement
 
@@ -56,6 +56,14 @@ Progress: Milestones 1 (scaffold), 2 (transcription without speakers), 3 (speake
 - A new model file, or a changed one, needs its SHA-256 in `package.ps1`'s list.
 - The README is the user's install guide. When behaviour, options or limits change, update it too.
 
+## Recording (Milestone 7)
+
+- `Talktrace.Recording` runs in the app process: `MeetingRecorder` (devices, writer thread, keep-awake), `AlignedWriter` (pure; unit-tested with simulated clocks), `RecordingWavFile` (crash-safe WAV and recovery), `AudioInput` (NAudio 3.3 `WasapiRecorderBuilder`). The two-track transcription path is in Core (`Transcriber.TranscribeCall`, `Calls\`), chosen by the sidecar (`Recordings\RecordingSidecar`).
+- System audio is process loopback excluding Talktrace (`AudioInput.OpenSystemAudio`), never a device's loopback: on this laptop a device's loopback fails (`0x8007045D`) once any app has the microphone open. Process loopback's activation blocks; open it off the UI thread.
+- The user's microphone was muted in Windows during Claude's tests, so capture gave zeros; check `AudioDevices.IsMuted` before blaming the code. Whether the microphone captures sound from inside the Claude app's package (where Claude's processes run) hasn't been checked; system audio does.
+- To test recording without touching the user's Documents, point Claude's (virtualised) `settings.json` `recordingsFolder` at the scratchpad, then drive the app with UI Automation (automation IDs `RecordTab`, `ModeInPerson`, `ModeCallHeadphones`, `ModeCallSpeakers`, `StartButton`, `PauseButton`, `ResumeButton`, `StopButton`, `ElapsedText`, `RecordingBadge`, `RecordError`, `MicrophoneNote`). Say before any test that plays sound aloud (section 3). A test recording captures whatever the PC plays, so check it by counts only.
+- `scripts\verify-arm64.ps1` needs `-Path` when run with `powershell -File` (its default uses `$PSScriptRoot`, empty there in PowerShell 5.1).
+
 ## Hard constraints
 
 Short form; the full text is in DESIGN.md section 2.
@@ -106,7 +114,7 @@ dotnet publish src/Talktrace.Cli -c Release -r win-arm64 --self-contained true -
 .\scripts\verify-arm64.ps1
 
 .\artifacts\publish\Talktrace.exe                                                   # the app
-.\artifacts\publish\Talktrace.Cli.exe <recording> [--speakers auto|none|1..8] [--threshold <x>] [--timestamps] [--threads <n>]   # saves "<name> - transcript.txt"
+.\artifacts\publish\Talktrace.Cli.exe <recording> [--speakers auto|none|1..8] [--threshold <x>] [--timestamps] [--threads <n>] [--name <your name>]   # saves "<name> - transcript.txt"
 .\artifacts\publish\Talktrace.Cli.exe <recording> --benchmark [--minutes 10]        # thread and batch timings
 ```
 

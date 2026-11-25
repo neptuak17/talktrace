@@ -6,7 +6,7 @@
         xmlns:local="clr-namespace:Talktrace.App"
         mc:Ignorable="d"
         d:DataContext="{d:DesignInstance Type=local:MainViewModel}"
-        Title="Talktrace"
+        Title="{Binding WindowTitle}"
         Icon="Talktrace.ico"
         Width="900"
         Height="700"
@@ -22,7 +22,20 @@
       <Setter Property="Margin" Value="0,0,0,4" />
       <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
     </Style>
+    <Style x:Key="Note" TargetType="TextBlock">
+      <Setter Property="Margin" Value="0,2,0,0" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+    </Style>
+    <Style x:Key="SectionHeading" TargetType="TextBlock">
+      <Setter Property="Margin" Value="0,0,0,8" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
   </Window.Resources>
+
+  <Window.TaskbarItemInfo>
+    <TaskbarItemInfo />
+  </Window.TaskbarItemInfo>
 
   <Window.InputBindings>
     <KeyBinding Key="O" Modifiers="Control" Command="{Binding ChooseRecordingCommand}" />
@@ -30,7 +43,9 @@
     <KeyBinding Key="Escape" Command="{Binding CancelCommand}" />
   </Window.InputBindings>
 
-  <Grid Margin="24,16,24,20">
+  <TabControl x:Name="Tabs" Margin="12,8,12,0" SelectedIndex="{Binding SelectedTab}" SelectionChanged="OnTabChanged">
+  <TabItem Header="Transcribe a file" AutomationProperties.AutomationId="FileTab">
+  <Grid Margin="12,16,12,20">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="Auto" />
@@ -285,7 +300,7 @@
                             AutomationProperties.AutomationId="PlaySample"
                             Command="{Binding PlaySampleCommand}"
                             FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                            Visibility="{Binding HasSample, Converter={StaticResource Visible}}">
+                            Visibility="{Binding CanPlay, Converter={StaticResource Visible}}">
                       <Button.Style>
                         <Style BasedOn="{StaticResource {x:Type Button}}" TargetType="Button">
                           <Setter Property="Content" Value="&#xE768;" />
@@ -359,4 +374,231 @@
                  TextTrimming="CharacterEllipsis" />
     </DockPanel>
   </Grid>
+  </TabItem>
+
+  <!-- Record a meeting (DESIGN.md section 9, Recording screen) -->
+  <TabItem Header="Record a meeting" AutomationProperties.AutomationId="RecordTab">
+    <ScrollViewer DataContext="{Binding Record}" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="12,16,12,20" MaxWidth="760" HorizontalAlignment="Left">
+
+        <!-- 1. Mode -->
+        <TextBlock Style="{StaticResource SectionHeading}" Text="How are you meeting?" />
+        <StackPanel IsEnabled="{Binding IsIdle}">
+          <RadioButton AutomationProperties.AutomationId="ModeInPerson" GroupName="Mode" IsChecked="{Binding IsInPerson}">
+            <TextBlock><Run FontWeight="SemiBold" Text="In person" />: microphone only</TextBlock>
+          </RadioButton>
+          <RadioButton Margin="0,4,0,0" AutomationProperties.AutomationId="ModeCallHeadphones" GroupName="Mode" IsChecked="{Binding IsCallHeadphones}">
+            <TextBlock><Run FontWeight="SemiBold" Text="Online call, headphones" />: your voice and the call as separate tracks</TextBlock>
+          </RadioButton>
+          <RadioButton Margin="0,4,0,0" AutomationProperties.AutomationId="ModeCallSpeakers" GroupName="Mode" IsChecked="{Binding IsCallSpeakers}">
+            <TextBlock><Run FontWeight="SemiBold" Text="Online call, speakers" />: as headphones, and removes call voices your mic picks up</TextBlock>
+          </RadioButton>
+        </StackPanel>
+
+        <!-- 2. Devices with level meters -->
+        <Grid Margin="0,20,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="180" />
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          <TextBlock Margin="0,0,16,0" VerticalAlignment="Center" Text="Microphone" />
+          <ComboBox Grid.Column="1"
+                    AutomationProperties.AutomationId="MicrophoneList"
+                    AutomationProperties.Name="Microphone"
+                    IsEnabled="{Binding IsIdle}"
+                    ItemsSource="{Binding Microphones}"
+                    SelectedItem="{Binding SelectedMicrophone}"
+                    DisplayMemberPath="Label" />
+          <ProgressBar Grid.Column="2"
+                       Height="8"
+                       Margin="16,0,0,0"
+                       VerticalAlignment="Center"
+                       AutomationProperties.AutomationId="MicrophoneLevel"
+                       AutomationProperties.Name="Microphone level"
+                       Maximum="1"
+                       Value="{Binding MicrophoneLevel, Mode=OneWay}" />
+          <TextBlock Grid.Row="1"
+                     Margin="0,12,16,0"
+                     VerticalAlignment="Center"
+                     Text="Call audio"
+                     Visibility="{Binding IsCall, Converter={StaticResource Visible}}" />
+          <TextBlock Grid.Row="1"
+                     Grid.Column="1"
+                     Margin="0,12,0,0"
+                     VerticalAlignment="Center"
+                     Style="{StaticResource Note}"
+                     Text="Everything your PC plays, on any device, except Talktrace"
+                     Visibility="{Binding IsCall, Converter={StaticResource Visible}}" />
+          <ProgressBar Grid.Row="1"
+                       Grid.Column="2"
+                       Height="8"
+                       Margin="16,12,0,0"
+                       VerticalAlignment="Center"
+                       AutomationProperties.AutomationId="SystemLevel"
+                       AutomationProperties.Name="Call audio level"
+                       Maximum="1"
+                       Value="{Binding SystemLevel, Mode=OneWay}"
+                       Visibility="{Binding IsCall, Converter={StaticResource Visible}}" />
+        </Grid>
+        <Border Margin="0,12,0,0"
+                Padding="12,8"
+                CornerRadius="6"
+                Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
+                Visibility="{Binding HasMicrophoneNote, Converter={StaticResource Visible}}">
+          <TextBlock AutomationProperties.AutomationId="MicrophoneNote" Text="{Binding MicrophoneNote}" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- 3. Start, Pause/Resume, Stop, elapsed time and the recording indicator -->
+        <StackPanel Margin="0,20,0,0" Orientation="Horizontal">
+          <Button MinWidth="120"
+                  MinHeight="36"
+                  AutomationProperties.AutomationId="StartButton"
+                  Command="{Binding StartCommand}"
+                  Content="Start recording"
+                  Style="{DynamicResource AccentButtonStyle}"
+                  Visibility="{Binding IsIdle, Converter={StaticResource Visible}}" />
+          <Button MinWidth="100"
+                  MinHeight="36"
+                  AutomationProperties.AutomationId="PauseButton"
+                  Command="{Binding PauseCommand}"
+                  Content="Pause"
+                  Visibility="{Binding IsRecordingNotPaused, Converter={StaticResource Visible}}" />
+          <Button MinWidth="100"
+                  MinHeight="36"
+                  AutomationProperties.AutomationId="ResumeButton"
+                  Command="{Binding ResumeCommand}"
+                  Content="Resume"
+                  Visibility="{Binding IsPaused, Converter={StaticResource Visible}}" />
+          <Button MinWidth="100"
+                  MinHeight="36"
+                  Margin="8,0,0,0"
+                  AutomationProperties.AutomationId="StopButton"
+                  Command="{Binding StopCommand}"
+                  Content="Stop"
+                  Visibility="{Binding IsRecording, Converter={StaticResource Visible}}" />
+          <Border Margin="20,0,0,0"
+                  Padding="10,3"
+                  VerticalAlignment="Center"
+                  CornerRadius="4"
+                  Visibility="{Binding IsRecording, Converter={StaticResource Visible}}">
+            <Border.Style>
+              <Style TargetType="Border">
+                <Setter Property="Background" Value="#C42B1C" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsPaused}" Value="True">
+                    <Setter Property="Background" Value="#9D5D00" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Border.Style>
+            <TextBlock AutomationProperties.AutomationId="RecordingBadge" Foreground="White" FontWeight="SemiBold">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Text" Value="● Recording" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsPaused}" Value="True">
+                      <Setter Property="Text" Value="Paused" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
+          </Border>
+          <TextBlock Margin="12,0,0,0"
+                     VerticalAlignment="Center"
+                     AutomationProperties.AutomationId="ElapsedText"
+                     FontSize="16"
+                     Text="{Binding ElapsedText}"
+                     Visibility="{Binding IsRecording, Converter={StaticResource Visible}}" />
+          <TextBlock Margin="16,0,0,0"
+                     VerticalAlignment="Center"
+                     Text="Starting…"
+                     Visibility="{Binding IsStarting, Converter={StaticResource Visible}}" />
+        </StackPanel>
+
+        <!-- 4. Standing notes -->
+        <StackPanel Margin="0,12,0,0">
+          <TextBlock Style="{StaticResource Note}" Text="Let participants know you're recording." />
+          <TextBlock Style="{StaticResource Note}" Text="Muting in Teams doesn't pause Talktrace; use Pause." />
+          <TextBlock Style="{StaticResource Note}"
+                     Text="Everything your PC plays is recorded, including notification sounds."
+                     Visibility="{Binding IsCall, Converter={StaticResource Visible}}" />
+        </StackPanel>
+
+        <!-- 5. Free disk space -->
+        <TextBlock Margin="0,8,0,0" AutomationProperties.AutomationId="FreeSpaceText" Text="{Binding FreeSpaceText}">
+          <TextBlock.Style>
+            <Style BasedOn="{StaticResource Note}" TargetType="TextBlock">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsLowOnSpace}" Value="True">
+                  <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
+
+        <!-- Errors and warnings -->
+        <Border Margin="0,16,0,0"
+                Padding="12,8"
+                CornerRadius="6"
+                Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}"
+                Visibility="{Binding HasError, Converter={StaticResource Visible}}">
+          <TextBlock AutomationProperties.AutomationId="RecordError" Text="{Binding ErrorMessage}" TextWrapping="Wrap" />
+        </Border>
+        <ItemsControl Margin="0,8,0,0" AutomationProperties.AutomationId="RecordWarnings" ItemsSource="{Binding Warnings}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Margin="0,4,0,0" Padding="12,8" CornerRadius="6" Background="{DynamicResource SystemFillColorCautionBackgroundBrush}">
+                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- Recording settings (section 3) -->
+        <Border Margin="0,24,0,0"
+                Padding="16,12"
+                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}">
+          <StackPanel>
+            <TextBlock Style="{StaticResource SectionHeading}" Text="Settings" />
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Margin="0,0,12,0" VerticalAlignment="Center" Text="Your name" />
+              <TextBox Width="200"
+                       AutomationProperties.AutomationId="YourName"
+                       AutomationProperties.Name="Your name"
+                       Text="{Binding YourName, UpdateSourceTrigger=LostFocus}"
+                       ToolTip="In online calls, your turns are labelled with this name." />
+            </StackPanel>
+            <CheckBox Margin="0,10,0,0"
+                      AutomationProperties.AutomationId="TranscribeWhenStopped"
+                      Content="Transcribe automatically when I stop"
+                      IsChecked="{Binding TranscribeWhenStopped}" />
+            <CheckBox Margin="0,6,0,0"
+                      AutomationProperties.AutomationId="KeepRecordings"
+                      Content="Keep recordings after transcribing"
+                      IsChecked="{Binding KeepRecordings}"
+                      ToolTip="When off, a recording goes to the Recycle Bin once its transcript is saved." />
+            <DockPanel Margin="0,10,0,0">
+              <Button Margin="8,0,0,0" Command="{Binding OpenRecordingsFolderCommand}" Content="Open folder" DockPanel.Dock="Right" />
+              <Button Margin="12,0,0,0" Command="{Binding ChangeFolderCommand}" Content="Change…" DockPanel.Dock="Right" />
+              <TextBlock VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                <Run Text="Save recordings in:" />
+                <Run AutomationProperties.AutomationId="RecordingsFolder" Text="{Binding RecordingsFolder, Mode=OneWay}" />
+              </TextBlock>
+            </DockPanel>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+  </TabItem>
+  </TabControl>
 </Window>

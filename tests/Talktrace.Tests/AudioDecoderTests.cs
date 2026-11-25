@@ -104,7 +104,31 @@ public sealed class AudioDecoderTests : IDisposable
         Assert.Contains("M4A file", error.Message);
     }
 
-    private string WriteTone(string name, int sampleRate, int channels, double seconds)
+    [Theory]
+    [InlineData(16000)]
+    [InlineData(48000)]
+    public void Decodes_a_stereo_file_to_one_track_per_channel(int sampleRate)
+    {
+        string wav = WriteTone("call.wav", sampleRate, 2, seconds: 2, silentChannel: 1);
+
+        (AudioClip left, AudioClip right) = AudioDecoder.DecodeStereo(wav, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2.0, left.DurationSeconds, tolerance: 0.02);
+        Assert.Equal(left.Samples.Length, right.Samples.Length);
+        Assert.InRange(Rms(left.Samples), 0.2, 0.4);
+        Assert.InRange(Rms(right.Samples), 0, 0.01);
+    }
+
+    [Fact]
+    public void Decoding_a_mono_file_as_stereo_is_refused()
+    {
+        string wav = WriteTone("mono.wav", 16000, 1, seconds: 1);
+
+        Assert.Throws<TalktraceException>(() => AudioDecoder.DecodeStereo(wav, TestContext.Current.CancellationToken));
+        Assert.Equal(1, AudioDecoder.ReadChannelCount(wav));
+    }
+
+    private string WriteTone(string name, int sampleRate, int channels, double seconds, int? silentChannel = null)
     {
         string path = Path.Combine(_folder, name);
         int frames = (int)(sampleRate * seconds);
@@ -113,7 +137,7 @@ public sealed class AudioDecoderTests : IDisposable
         {
             short value = (short)(0.4 * short.MaxValue * Math.Sin(2 * Math.PI * 440 * i / sampleRate));
             for (int c = 0; c < channels; c++)
-                BitConverter.TryWriteBytes(pcm.AsSpan((i * channels + c) * 2), value);
+                BitConverter.TryWriteBytes(pcm.AsSpan((i * channels + c) * 2), c == silentChannel ? (short)0 : value);
         }
 
         using var writer = new WaveFileWriter(path, new WaveFormat(sampleRate, 16, channels));

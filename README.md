@@ -68,6 +68,35 @@ Telling voices apart is the least reliable part. Talktrace sometimes splits one 
 - Under **Advanced**, the **clustering threshold** (default 0.6) sets how alike two voices must be to count as one person on Auto-detect. Lower it if two people come out as one; raise it if one person comes out as two.
 - With speaker labels on, each turn is one paragraph however long it runs.
 
+## Recording a meeting
+
+The **Record a meeting** tab records a meeting and transcribes it when you stop. Windows shares the microphone, so recording never gets in Teams', Zoom's or any other app's way.
+
+1. **Choose how you're meeting.**
+   - **In person:** the microphone only. Speakers are told apart by voice, as for any recording.
+   - **Online call, headphones:** your microphone and the call, recorded separately. Your words are labelled with your name; the others are told apart by voice.
+   - **Online call, speakers:** as headphones, and Talktrace also removes the others' voices that your microphone picks up from the speaker. Headphones or a speakerphone give cleaner transcripts than the laptop's own speakers.
+
+   Talktrace remembers the mode you last used with each playback device (your headphones, the speakerphone, the laptop's speakers) and picks it when that device is the Windows default. You can always change it before you start.
+2. **Check the levels.** The microphone follows the Windows default unless you choose another. For a call, **Call audio** is everything your PC plays, on any device, so notification sounds are recorded too. Both meters move as you speak and as sound plays. A note warns if your microphone is muted in Windows or is running at phone quality.
+3. **Click Start recording.** The tab shows the time recorded, a red **Recording** badge, and a red dot on Talktrace's taskbar button. Let participants know you're recording.
+   - **Pause** stops recording until you click **Resume**. Muting yourself in Teams doesn't pause Talktrace.
+   - If you plug in headphones or change the default microphone mid-meeting, Talktrace switches to it and carries on.
+   - The PC is kept awake while recording, even with the window minimised. Closing the laptop's lid may still put it to sleep, depending on your power settings.
+4. **Click Stop.** The recording is saved and opens on the **Transcribe a file** tab, ready to transcribe; with **Transcribe automatically when I stop** on, transcription starts straight away. For a call, the **Speakers** choice counts the *other* participants; choose **1 other participant** to skip telling voices apart.
+
+Closing the window while recording asks first, then stops and saves the recording.
+
+**Settings** at the bottom of the tab:
+- **Your name** labels your turns in call transcripts (default "Me"). Renaming yourself in the speakers panel changes only that transcript.
+- **Transcribe automatically when I stop** (on by default).
+- **Keep recordings after transcribing** (on by default). When off, a recording goes to the Recycle Bin once its transcript is saved.
+- **Save recordings in:** `Documents\Talktrace\Recordings` unless you change it. Recordings are named by date and time, such as `Recording 2026-10-29 1405.wav`, with a small `.talktrace.json` file beside each that records how it was made. A call recording takes about 230 MB an hour, an in-person one about 115 MB.
+
+**If Talktrace closes while recording** (a crash, or the PC losing power), the recording is kept up to the last few seconds. The next time Talktrace starts, it offers to recover it.
+
+If the disk is almost full (under 200 MB free), Talktrace stops and saves the recording rather than failing; it warns when less than 1 GB is left.
+
 ### Settings and the log
 
 Talktrace remembers your last options (saved when a transcription starts) and the window's size and position.
@@ -87,6 +116,7 @@ The same transcription without the window:
 - `--threshold <x>`: the clustering threshold for Auto-detect.
 - `--threads <n>`: threads to use (default 6, or fewer on a smaller processor).
 - `--out <path>`: where to save, instead of next to the recording.
+- `--name <your name>`: for a call recording made by Talktrace, the name your turns carry (default `Me`). The `--speakers` count is then of the other participants.
 
 It prints how long each stage took. `Talktrace.Cli.exe <recording> --benchmark [--minutes 10]` compares thread counts on the first minutes of a recording.
 
@@ -104,8 +134,10 @@ It prints how long each stage took. `Talktrace.Cli.exe <recording> --benchmark [
   [Environment]::SetEnvironmentVariable('TALKTRACE_MODELS_DIR', 'C:\TalktraceModels', 'User')
   ```
 - **Unsigned.** Windows warns about it the first time (see Install). If Smart App Control is on, Windows blocks unsigned apps outright and Talktrace can't run.
-- **No recording yet.** Talktrace transcribes existing recordings; recording meetings in the app is planned.
-- **Not live.** Transcription happens after the meeting, never during it.
+- **Not live.** Transcription happens after the meeting, never during it. Talktrace doesn't transcribe while it records.
+- **Recording calls needs Windows 10 version 2004 or later.**
+- **Bluetooth headphones** switch to a phone-quality mode as soon as any app uses their microphone, which makes transcripts less accurate. Wired or USB headphones, or a speakerphone, do better.
+- **Everything your PC plays is recorded** during a call, including notification sounds and any video playing.
 
 ## Building from source
 

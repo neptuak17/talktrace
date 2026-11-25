@@ -10,13 +10,15 @@ public sealed partial class SpeakerRow : ObservableObject
     private readonly MainViewModel _owner;
     private bool _resetting;
 
-    public SpeakerRow(MainViewModel owner, int number, Turn? sampleTurn)
+    /// <param name="label">Speaker N, or in a call recording, my name for my own row (section 3).</param>
+    public SpeakerRow(MainViewModel owner, int number, string label, Turn? sampleTurn)
     {
         _owner = owner;
         Number = number;
-        Label = TranscriptFormatter.SpeakerName(number);
+        Label = label;
         CurrentName = Label;
         SampleTurn = sampleTurn;
+        CanPlay = sampleTurn is not null;
         Sample = sampleTurn is null ? "" : $"“{SpeakerNames.SampleSentence(sampleTurn)}”";
         _resetting = true;
         NameText = "";
@@ -36,7 +38,9 @@ public sealed partial class SpeakerRow : ObservableObject
 
     public string Sample { get; }
 
-    public bool HasSample => SampleTurn is not null;
+    /// <summary>There's a sample to play, and the recording it comes from is still there.</summary>
+    [ObservableProperty]
+    public partial bool CanPlay { get; set; }
 
     /// <summary>What's in the name box. Bound so it changes on Enter or when the box loses focus, which applies the rename.</summary>
     [ObservableProperty]

@@ -16,7 +16,7 @@ public static class TranscriptFormatter
             .Append(" · Duration: ").Append(FormatDuration(result.Duration))
             .Append(" · Model: ").Append(result.ModelName).Append(NewLine);
         if (result.SpeakerLabels && result.Speakers.Count > 0)
-            text.Append("Speakers: ").AppendJoin(", ", result.Speakers.Select(SpeakerName)).Append(NewLine);
+            text.Append("Speakers: ").AppendJoin(", ", result.Speakers.Select(result.SpeakerName)).Append(NewLine);
 
         foreach (Turn turn in result.Turns)
         {
@@ -24,7 +24,7 @@ public static class TranscriptFormatter
             if (includeTimestamps)
                 text.Append('[').Append(FormatTimestamp(turn.Start)).Append("] ");
             if (turn.Speaker is int speaker)
-                text.Append(SpeakerName(speaker)).Append(": ");
+                text.Append(result.SpeakerName(speaker)).Append(": ");
             text.Append(turn.Text).Append(NewLine);
         }
 

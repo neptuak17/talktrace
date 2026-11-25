@@ -25,11 +25,13 @@ Console.OutputEncoding = System.Text.Encoding.UTF8;
 
 const string Usage = """
     Usage: Talktrace.Cli.exe <file> [--speakers auto|none|1..8] [--model fast|multilingual]
-                             [--timestamps] [--out <path>] [--threads <n>] [--threshold <x>]
+                             [--timestamps] [--out <path>] [--threads <n>] [--threshold <x>] [--name <your name>]
            Talktrace.Cli.exe <file> --benchmark [--minutes <n>]
 
       --speakers   auto (default) finds the number of speakers; none leaves out speaker labels.
+                   For a call recording, the count is of the other participants.
       --threshold  voices closer than this are one speaker, default 0.6: lower finds more speakers.
+      --name       in a call recording, the name your turns carry (default Me).
     """;
 
 string? input = null;
@@ -76,6 +78,10 @@ try
                 break;
             case "--timestamps":
                 options = options with { IncludeTimestamps = true };
+                break;
+            case "--name":
+                string name = Value().Trim();
+                options = options with { YourName = name.Length > 0 ? name : throw new ArgumentException("--name needs a name.") };
                 break;
             case "--out":
                 options = options with { OutputPath = Value() };

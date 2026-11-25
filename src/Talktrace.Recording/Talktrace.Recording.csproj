@@ -1,6 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Microphone and system-audio capture (Milestone 7). Runs in the app process, never in the worker. -->
+  <PropertyGroup>
+    <!-- The power request's P/Invoke (KeepAwake) is source-generated and needs it. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio.Wasapi" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Talktrace.Core\Talktrace.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Talktrace.Tests" />
   </ItemGroup>
 </Project>

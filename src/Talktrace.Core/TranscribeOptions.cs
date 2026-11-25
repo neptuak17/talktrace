@@ -67,4 +67,18 @@ public sealed record TranscribeOptions
 
     // Assembling the transcript
     public double ParagraphPauseSeconds { get; init; } = 2;
+
+    // Call recordings (DESIGN.md section 9)
+    /// <summary>The name my turns carry in a call recording: the Your name setting.</summary>
+    public string YourName { get; init; } = DefaultYourName;
+    public const string DefaultYourName = "Me";
+    /// <summary>
+    /// A phrase is one speaker's words with no pause this long inside them. Phrases are what echo removal judges and
+    /// what the two tracks are merged by.
+    /// </summary>
+    public double PhrasePauseSeconds { get; init; } = 0.5;
+    /// <summary>A microphone phrase is echo when at least this share of its words were also heard on the call...</summary>
+    public double EchoMatchFraction { get; init; } = 0.6;
+    /// <summary>...each within this many seconds of the microphone word.</summary>
+    public double EchoWindowSeconds { get; init; } = 1.5;
 }
